@@ -47,4 +47,3 @@ Contacto
 -------
 
 Mantené la especificación en spec/ como fuente de verdad antes de cambiar la lógica.
-
