@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 name: CI
 
 on:
@@ -34,3 +35,41 @@ jobs:
 
       - name: Run tests
         run: julia --project=. -e "using Pkg; Pkg.test()"
+=======
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+      - release/*
+      - hotfix/*
+  pull_request:
+    branches:
+      - main
+      - dev
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Julia
+        uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.10'
+
+      - name: Cache Julia artifacts
+        uses: julia-actions/cache@v2
+
+      - name: Instantiate
+        run: julia --project=. -e "using Pkg; Pkg.instantiate()"
+
+      - name: Run tests
+        run: julia --project=. -e "using Pkg; Pkg.test()"
+>>>>>>> origin/dev
