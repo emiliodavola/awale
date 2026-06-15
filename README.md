@@ -1,4 +1,3 @@
-<<<<<<< ours
 # Awale — Specification-driven Awale (Oware) RL (Julia)
 
 Resumen breve
@@ -99,4 +98,4 @@ Contacto
 -------
 
 Mantené la especificación en spec/ como fuente de verdad antes de cambiar la lógica.
->>>>>>> theirs
+
