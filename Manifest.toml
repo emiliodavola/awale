@@ -2,9 +2,6 @@
 
 julia_version = "1.11.9"
 manifest_format = "2.0"
-<<<<<<< HEAD
-project_hash = "936602a403701381d80ac2b532c05304fd55a0fe"
-=======
 project_hash = "29d15e65add6a7debed1224d8e087a5eed032089"
 
 [[deps.ADTypes]]
@@ -726,18 +723,12 @@ version = "1.5.2"
 git-tree-sha1 = "632eb4abab3449ab30c5e1afaa874f0b98b586e4"
 uuid = "8162dcfd-2161-5ef2-ae6c-7681170c5f98"
 version = "0.2.0"
->>>>>>> origin/dev
 
 [[deps.Printf]]
 deps = ["Unicode"]
 uuid = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 version = "1.11.0"
 
-<<<<<<< HEAD
-[[deps.Unicode]]
-uuid = "4ec0a83e-493e-50e2-b9ac-8f72acf5a8f5"
-version = "1.11.0"
-=======
 [[deps.ProgressLogging]]
 deps = ["Logging", "SHA", "UUIDs"]
 git-tree-sha1 = "f0803bc1171e455a04124affa9c21bba5ac4db32"
@@ -1015,4 +1006,3 @@ version = "1.59.0+0"
 deps = ["Artifacts", "Libdl"]
 uuid = "3f19e933-33d8-53b3-aaab-bd5110c3b7a0"
 version = "17.4.0+2"
->>>>>>> origin/dev
