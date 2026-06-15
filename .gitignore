@@ -17,6 +17,15 @@
 .mcp/
 serve/artifacts/
 
+# Local progress file (not versioned)
+.progress.md
+
 # OS files
 Thumbs.db
 .DS_Store
+# Model weights and checkpoints
+*.bin
+ncheckpoints/
+skills-lock.json
+.agents/
+.claude/

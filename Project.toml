@@ -1,0 +1,20 @@
+name = "Awale"
+uuid = "1fca9b84-4cc5-4472-afa3-0f8c8abc1f73"
+authors = ["Emilio Dávola"]
+version = "0.1.0"
+
+[deps]
+Flux = "587475ba-b771-5e3f-ad9e-33799f191a9c"
+Functors = "d9f16b24-f501-4c13-a1f2-28368ffc5196"
+Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+Serialization = "9e88b42a-f829-5b0c-bbe9-9e923198166b"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+
+[compat]
+Flux = "0.16.10"
+Functors = "0.5.2"
+Random = "1.11.0"
+Serialization = "1.11.0"
+StaticArrays = "1.9.18"
+julia = ">= 1.8"
