@@ -1,30 +1,3 @@
-<<<<<<< HEAD
-# Julia artifacts
-/.julia
-/.julia_history
-/.julia_build
-/deps/
-/artifacts/
-
-# Build and cache
-*.jlso
-*.ji
-
-# Logs and runtime
-/logs/
-/tmp/
-
-# MCP and local server artifacts
-.mcp/
-serve/artifacts/
-
-# Local progress file (not versioned)
-.progress.md
-
-# OS files
-Thumbs.db
-.DS_Store
-=======
 # Julia artifacts
 /.julia
 /.julia_history
@@ -56,4 +29,3 @@ ncheckpoints/
 skills-lock.json
 .agents/
 .claude/
->>>>>>> origin/dev
