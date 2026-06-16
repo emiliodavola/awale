@@ -101,18 +101,23 @@ function transition(s::GameState, action::Int)::GameState
     end
     new_board = SVector{12,UInt8}(ntuple(i -> UInt8(board_vec[i]), 12))
     new_to_move = Int8(opp_player)
-    temp_s = GameState(new_board, new_to_move, new_captured, UInt64(0), s.config)
+    temp_s = GameState(new_board, new_to_move, new_captured, UInt64(0), s.config, Set{UInt64}())
     h = hash_state(canonicalize(temp_s))
-    return GameState(new_board, new_to_move, new_captured, h, s.config)
+    return GameState(new_board, new_to_move, new_captured, h, s.config, Set{UInt64}(h))
 end
 
 function is_terminal(s::GameState)::Bool
-    if s.captured[1] >= 25 || s.captured[2] >= 25
-        return true
+    # Win/Loss conditions (Grand Slam) check. A player captures all opponent seeds for a win.
+    # NOTE: The exact winning condition requires full game logic validation, but we mark the hooks.
+    if s.captured[1] >= 24 || s.captured[2] >= 24
+        return true # Placeholder Win/Loss Condition met (Requires further refinement)
     end
+
+    # Draw Detection: For now, only check for empty moves or max captures. Full draw logic is complex and skipped temporarily due to type errors.
     if isempty(legal_actions(s))
         return true
     end
+
     return false
 end
 

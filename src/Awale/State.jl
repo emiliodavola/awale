@@ -32,6 +32,8 @@ struct GameState
     captured::NTuple{2,UInt8}
     history_hash::UInt64
     config::GameConfig
+    # State history used for draw detection by storing hashes of all previous states in this game path.
+    history_hashes::Set{UInt64} 
 end
 
 # Create canonical initial state: 4 seeds per pit, player 1 to move
@@ -39,9 +41,30 @@ function initial_state(config::GameConfig=GameConfig())::GameState
     board = SVector{12,UInt8}(ntuple(i->UInt8(4), 12))
     to_move = Int8(1)
     captured = (UInt8(0), UInt8(0))
-    s = GameState(board, to_move, captured, UInt64(0), config)
-    h = hash_state(canonicalize(s))
-    return GameState(board, to_move, captured, h, config)
+
+    temp = GameState(
+        board,
+        to_move,
+        captured,
+        UInt64(0),
+        config,
+        Set{UInt64}()
+    )
+
+    canonical = canonicalize(temp)
+    h = hash_state(canonical)
+
+    history = Set{UInt64}()
+    push!(history, h)
+
+    return GameState(
+        board,
+        to_move,
+        captured,
+        h,
+        config,
+        history
+    )
 end
 
 # Helper: rotate board by k positions (positive k rotates left)
@@ -56,7 +79,7 @@ function canonicalize(s::GameState)::GameState
         board = rotate_board(s.board, 6)
         captured = (s.captured[2], s.captured[1])
         cfg = s.config
-        return GameState(board, Int8(1), captured, UInt64(0), cfg)
+        return GameState(board, Int8(1), captured, UInt64(0), cfg, Set{UInt64}())
     end
 end
 
@@ -73,20 +96,23 @@ const REPETITION_MAP_REV = Dict(v=>k for (k,v) in REPETITION_MAP)
 const FEEDING_MAP_REV = Dict(v=>k for (k,v) in FEEDING_MAP)
 
 function serialize_state(s::GameState)::Vector{UInt8}
-    buf = Vector{UInt8}()
-    push!(buf, UInt8(1))  # version
+    # Usar un buffer pre-dimensionado o directamente construir el Vector para evitar reasignaciones internas.
+    buf = Vector{UInt8}(undef, 1 + 12 + 1 + 2 + 4) # Tamaño fijo conocido de la estructura de bytes.
+
+    idx = 1 # Índice de escritura en el buffer.
+    buf[idx] = UInt8(1); idx += 1  # version
     for i in 1:12
-        push!(buf, s.board[i])
+        buf[idx] = s.board[i]; idx += 1
     end
-    push!(buf, UInt8(s.to_move))
-    push!(buf, s.captured[1])
-    push!(buf, s.captured[2])
+    buf[idx] = UInt8(s.to_move); idx += 1
+    buf[idx] = s.captured[1]; idx += 1
+    buf[idx] = s.captured[2]; idx += 1
     # config
-    push!(buf, get(STARVATION_MAP, s.config.starvation, UInt8(255)))
-    push!(buf, get(GRANDSLAM_MAP, s.config.grand_slam, UInt8(255)))
-    push!(buf, get(REPETITION_MAP, s.config.repetition, UInt8(255)))
-    push!(buf, get(FEEDING_MAP, s.config.forced_feeding, UInt8(255)))
-    return buf
+    buf[idx] = get(STARVATION_MAP, s.config.starvation, UInt8(255)); idx += 1
+    buf[idx] = get(GRANDSLAM_MAP, s.config.grand_slam, UInt8(255)); idx += 1
+    buf[idx] = get(REPETITION_MAP, s.config.repetition, UInt8(255)); idx += 1
+    buf[idx] = get(FEEDING_MAP, s.config.forced_feeding, UInt8(255)); idx += 1
+    return buf # Devolver el buffer ya construido
 end
 
 function deserialize_state(bytes::Vector{UInt8})::GameState
@@ -111,9 +137,9 @@ function deserialize_state(bytes::Vector{UInt8})::GameState
     repetition = get(REPETITION_MAP_REV, b3, :draw_on_repeat)
     forced_feeding = get(FEEDING_MAP_REV, b4, :allow_move_feeding)
     cfg = GameConfig(starvation, grand_slam, repetition, forced_feeding)
-    s = GameState(board, to_move, captured, UInt64(0), cfg)
+    s = GameState(board, to_move, captured, UInt64(0), cfg, Set{UInt64}())
     h = hash_state(canonicalize(s))
-    return GameState(board, to_move, captured, h, cfg)
+    return GameState(board, to_move, captured, h, cfg, Set{UInt64}(h))
 end
 
 function hash_state(s::GameState)::UInt64

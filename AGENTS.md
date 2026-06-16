@@ -40,7 +40,29 @@ To maintain research-grade reliability, the following must be strictly enforced:
   - Root exploration must use Dirichlet noise with injected RNG.
 - **Neural Network**: Input is a canonicalized state encoding; outputs are policy logits for 6 local actions and a scalar value in $[-1, 1]$.
 
-## Coding Style & Development Workflow
+## GameState API Contract (CRITICAL)
+
+The implementation of `GameState` must adhere to strict invariants to ensure test stability and determinism across module boundaries (`src/` vs `test/`). These rules govern state construction and consumption.
+
+- **Canonical Definition:** The authoritative structure is defined by the public fields:
+
+```julia
+struct GameState{
+    board::SVector{12, UInt8}
+    to_move::Int8
+    captured::NTuple{2, UInt8}
+    history_hash::UInt64
+    config::GameConfig
+    history_hashes::Set{UInt64}
+end
+```
+
+- **Constructor Policy:** The system MUST rely on a canonical full constructor and safe, outer convenience constructors for flexibility (e.g., `Vector` $\to$ `SVector`). Breaking existing constructor calls or removing old ones without migration is forbidden.
+- **Single Source of Truth:** Any change to the underlying type structure (e.g., field addition/removal in `GameState`) requires a multi-step update:
+  1) Update all constructors,
+  2) Add compatibility layers if necessary, and
+  3) Update ALL dependent tests. Never leave partial mismatches between source code and test files.
+- **Testing Principle:** Tests must validate *behavior*, not construction mechanics. Factory functions (like `Awale.initial_state()`) should always be preferred over direct manual raw field initialization in tests.
 
 - **Determinism**: All transitions, hashing, and search logic must be deterministic given the same RNG seed and model weights.
 - **RNG Management**: Inject RNG objects into non-deterministic routines; **do not use the global RNG**.

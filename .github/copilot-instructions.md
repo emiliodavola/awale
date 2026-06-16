@@ -55,7 +55,29 @@ Entry points:
 3) Key codebase conventions (important)
 ---------------------------------------
 These are enforced by specs in spec/02_state_model and spec/01_game_rules.
-- State representation: board :: SVector{12,UInt8} (StaticArrays), to_move ∈ {1,2}, captured :: NTuple{2,UInt8}
+
+***GameState API Contract (CRITICAL)***
+
+The implementation of `GameState` must adhere to strict invariants to ensure test stability and determinism across module boundaries (`src/` vs `test/`). These rules govern state construction and consumption and supersede general module guidance when defining state contracts.
+
+**Canonical Definition:** The authoritative structure is defined by the public fields:
+```julia
+struct GameState{
+    board::SVector{12, UInt8}
+    to_move::Int8
+    captured::NTuple{2, UInt8}
+    history_hash::UInt64
+    config::GameConfig
+    history_hashes::Set{UInt64}
+end
+```
+
+**Constructor Policy:** The system MUST rely on a canonical full constructor and safe, outer convenience constructors for flexibility (e.g., `Vector` $\to$ `SVector`). Breaking existing constructor calls or removing old ones without migration is forbidden.
+
+**Single Source of Truth:** Any change to the underlying type structure (e.g., field addition/removal in `GameState`) requires a multi-step update: 1) Update all constructors, 2) Add compatibility layers if necessary, and 3) Update ALL dependent tests. Never leave partial mismatches between source code and test files.
+
+**Testing Principle:** Tests must validate *behavior*, not construction mechanics. Factory functions (like `Awale.initial_state()`) should always be preferred over direct manual raw field initialization in tests.
+
 - Canonicalization: canonicalize(s) returns state from current-player perspective and must be idempotent
 - Immutability: GameState is immutable; transition(s,a) returns new GameState and never mutates inputs
 - Determinism: All transitions, serialization, hashing, and MCTS must be deterministic given same RNG and model outputs

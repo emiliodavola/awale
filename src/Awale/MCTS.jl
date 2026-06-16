@@ -23,6 +23,8 @@ end
 struct MCTSSearch
     model
     c_puct::Float32
+    # Transposition Table: Maps canonical state hash to the best known value (Q) and visit count (N) for optimization lookup
+    transposition_table::Dict{UInt64, Tuple{Float32, Int64}} 
 end
 
 function search(mcts::MCTSSearch, root_state::GameState, num_sims::Int, rng=Random.default_rng())
