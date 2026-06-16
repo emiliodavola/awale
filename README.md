@@ -14,6 +14,15 @@ Proyecto de investigación para desarrollar un sistema AlphaZero-like para Awale
 - ✅ **MCTS Architecture:** Integración de la Transposition Table (TT) para optimización de búsqueda.
 - ✅ **Performance Optimization:** Reducción de asignaciones de memoria en los hot-paths.
 
+## Configuración del Proyecto
+------------------------
+
+El sistema utiliza un archivo de configuración para la experimentación masiva que debe seguir el formato de `config.json.example`
+
+```bash
+cp config.json.example config.json
+```
+
 Siguientes pasos recomendados
 ----------------------------
 
