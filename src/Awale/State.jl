@@ -25,6 +25,7 @@ GameState: immutable representation of the game
 - captured: NTuple{2,UInt8}
 - history_hash: UInt64 (computed on canonicalized serialize)
 - config: GameConfig
+- history_hashes: Set{UInt64}
 """
 struct GameState
     board::SVector{12,UInt8}
@@ -41,30 +42,15 @@ function initial_state(config::GameConfig=GameConfig())::GameState
     board = SVector{12,UInt8}(ntuple(i->UInt8(4), 12))
     to_move = Int8(1)
     captured = (UInt8(0), UInt8(0))
+    cfg = config
 
-    temp = GameState(
-        board,
-        to_move,
-        captured,
-        UInt64(0),
-        config,
-        Set{UInt64}()
-    )
-
-    canonical = canonicalize(temp)
-    h = hash_state(canonical)
-
+    # The initial state starts with an empty history.
+    # Its own hash will be added during the first transition.
     history = Set{UInt64}()
-    push!(history, h)
-
-    return GameState(
-        board,
-        to_move,
-        captured,
-        h,
-        config,
-        history
-    )
+    
+    h = hash_state(GameState(board, to_move, captured, UInt64(0), cfg, history))
+    
+    return GameState(board, to_move, captured, h, cfg, history)
 end
 
 # Helper: rotate board by k positions (positive k rotates left)

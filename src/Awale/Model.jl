@@ -3,6 +3,7 @@ module Model
 using Flux
 using Serialization
 using ..State: GameState, canonicalize
+using ..Utils: fnv1a64
 
 export create_model, predict, predict_batch, predict_raw, encode_state, save_model, load_model
 
@@ -33,13 +34,14 @@ function create_model()
 end
 
 function encode_state(s::GameState)::Vector{Float32}
-    # Board is NTuple{12}, captured is NTuple{2} -> Total 14
-    board = Float32.(collect(s.board)) ./ 48f0
-    captured = Float32[
-        s.captured[1] / 48f0,
-        s.captured[2] / 48f0
-    ]
-    return vcat(board, captured)
+    # Pre-allocate a single vector to minimize allocations and avoid vcat
+    x = Vector{Float32}(undef, 14)
+    for i in 1:12
+        x[i] = Float32(s.board[i]) / 48f0
+    end
+    x[13] = Float32(s.captured[1]) / 48f0
+    x[14] = Float32(s.captured[2]) / 48f0
+    return x
 end
 
 function predict_raw(model::AwaleModel, X::AbstractMatrix{Float32})

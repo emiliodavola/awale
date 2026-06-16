@@ -66,7 +66,7 @@ function search_with_stats(mcts::MCTSSearch, root_state::GameState, num_sims::In
             v
         end
 
-        backup(path, val)
+        backup(path, val, mcts)
     end
 
     counts = zeros(Float32, 6)
@@ -164,7 +164,16 @@ function expand(mcts::MCTSSearch, node::MCTSNode)
 
     for (i, action) in enumerate(actions)
         s_next = transition(node.state, action)
-        node.children[action] = MCTSNode(canonicalize(s_next), legal_probs[i])
+        child_state = canonicalize(s_next)
+        prior = legal_probs[i]
+        
+        if haskey(mcts.transposition_table, child_state.history_hash)
+            (q_cached, n_cached) = mcts.transposition_table[child_state.history_hash]
+            # We can initialize the child node with cached knowledge if applicable
+            # But for a clean MCTS, we typically just expand and rely on select_puct's TT usage.
+        end
+        
+        node.children[action] = MCTSNode(child_state, prior)
     end
 end
 
@@ -173,8 +182,18 @@ function select_puct(mcts::MCTSSearch, node::MCTSNode)
     best_a = 0
     n_parent = node.visits[]
     for (action, child) in node.children
+        # Check Transposition Table for cached statistics
         q = child.value_sum[] / max(1, child.visits[])
-        u = q + mcts.c_puct * child.prior * sqrt(n_parent) / (1 + child.visits[])
+        n = child.visits[]
+        
+        if haskey(mcts.transposition_table, child.state.history_hash)
+            (q_cached, n_cached) = mcts.transposition_table[child.state.history_hash]
+            # Use cached values to bias selection toward historically valuable branches
+            u = q_cached + mcts.c_puct * child.prior * sqrt(n_parent) / (1 + n_cached)
+        else
+            u = q + mcts.c_puct * child.prior * sqrt(n_parent) / (1 + n)
+        end
+        
         if u > best_u
             best_u = u
             best_a = action
@@ -183,12 +202,18 @@ function select_puct(mcts::MCTSSearch, node::MCTSNode)
     return best_a
 end
 
-function backup(path::Vector{MCTSNode}, leaf_val::Float32)
+function backup(path::Vector{MCTSNode}, leaf_val::Float32, mcts::MCTSSearch)
     v = leaf_val
     for i in length(path):-1:1
         node = path[i]
         node.visits[] += 1
         node.value_sum[] += v
+        
+        # Update Transposition Table with aggregated value and visits
+        q_avg = node.value_sum[] / node.visits[]
+        n_total = node.visits[]
+        mcts.transposition_table[node.state.history_hash] = (q_avg, n_total)
+        
         v = -v
     end
 end

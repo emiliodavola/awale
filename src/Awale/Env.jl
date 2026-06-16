@@ -2,6 +2,7 @@ module Env
 
 using StaticArrays: SVector
 using ..State: GameState, GameConfig, canonicalize, hash_state
+using ..Utils: fnv1a64
 
 export legal_actions, transition, is_terminal, reward, local_to_global
 
@@ -24,7 +25,13 @@ end
 function simulate_move(s::GameState, action::Int)
     idx = local_to_global(action, s)
     seeds = s.board[idx]
-    board_vec = collect(s.board)
+    
+    # Use a local mutable array for calculation to minimize allocations in the hot-path
+    board_vec = zeros(UInt8, 12)
+    for i in 1:12
+        board_vec[i] = s.board[i]
+    end
+    
     board_vec[idx] = 0
     pos = idx
     while seeds > 0
@@ -41,10 +48,10 @@ function simulate_move(s::GameState, action::Int)
             captured += board_vec[temp_pos]
             board_vec[temp_pos] = 0
             temp_pos = (temp_pos - 2 + 12) % 12 + 1
-            is_opp = (current_p == 1) ? (7 <= temp_pos <= 12) : (1 <= temp_pos <= 6)
+            is_opp = (current_p == 1) ? (7 <= temp_pos <= 12) : (1 <= pos <= 6)
         end
     end
-    return board_vec, captured
+    return SVector{12,UInt8}(board_vec), captured
 end
 
 function legal_actions(s::GameState)::Vector{Int}
@@ -99,21 +106,31 @@ function transition(s::GameState, action::Int)::GameState
     else
         new_captured = (s.captured[1], s.captured[2] + captured_this_turn)
     end
-    new_board = SVector{12,UInt8}(ntuple(i -> UInt8(board_vec[i]), 12))
+    new_board = board_vec # SVector{12,UInt8}(board_vec) is implicitly converted if types match
     new_to_move = Int8(opp_player)
-    temp_s = GameState(new_board, new_to_move, new_captured, UInt64(0), s.config, Set{UInt64}())
+    
+    # Construct new state and update history to include the hash of the state we just left
+    temp_s = GameState(new_board, new_to_move, new_captured, UInt64(0), s.config, s.history_hashes)
     h = hash_state(canonicalize(temp_s))
-    return GameState(new_board, new_to_move, new_captured, h, s.config, Set{UInt64}(h))
+    new_history = copy(s.history_hashes)
+    push!(new_history, s.history_hash)
+    
+    return GameState(new_board, new_to_move, new_captured, h, s.config, new_history)
 end
 
 function is_terminal(s::GameState)::Bool
-    # Win/Loss conditions (Grand Slam) check. A player captures all opponent seeds for a win.
-    # NOTE: The exact winning condition requires full game logic validation, but we mark the hooks.
-    if s.captured[1] >= 24 || s.captured[2] >= 24
-        return true # Placeholder Win/Loss Condition met (Requires further refinement)
+    # 1. Win Condition (Grand Slam)
+    if s.captured[1] == 24 || s.captured[2] == 24
+        return true
     end
 
-    # Draw Detection: For now, only check for empty moves or max captures. Full draw logic is complex and skipped temporarily due to type errors.
+    # 2. Draw Detection (Repetition)
+    # If the current state's hash has already been seen in the history, it's a draw.
+    if s.history_hash in s.history_hashes
+        return true
+    end
+
+    # 3. End of Game (No legal moves)
     if isempty(legal_actions(s))
         return true
     end
