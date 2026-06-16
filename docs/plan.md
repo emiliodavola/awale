@@ -1,53 +1,61 @@
-# Code Review & Next Steps - Awale RL System
+# Code Review & Next Steps - Awale RL System (v2.0)
+<!-- Updated on 2026-06-15 -->
 
-This document summarizes the findings of the comprehensive code review and architectural assessment performed on 2026-06-15. It outlines necessary steps to align the implementation with research-grade specifications, ensuring strict compliance with recently codified contracts (e.g., GameState API Contract).
+This document outlines the necessary, architecturally sound steps to align the implementation with research-grade specifications, ensuring strict compliance with codified contracts, particularly regarding state efficiency (Transposition Tables) and game completeness (Terminal States).
 
-## 🚩 Critical Issues Found
+## 🚩 Critical Issues & Architectural Gaps Found
 
-### 1. Missing Game-Ending Conditions
+**The following gaps must be addressed in order to achieve a production-ready system:**
 
-* **Location:** `src/Awale/Env.jl`
-* **Severity:** High
-* **Description:** The current `is_terminal` logic only checks for seed capture counts (25) or lack of legal moves. It fails to account for:
-  * **Grand Slam:** Immediate win when a player captures all opponent seeds or performs a full-capture.
-  * **Repetitions (Draws):** No mechanism is implemented to detect repeated game states using the `history_hash`, which should trigger a draw.
+### 1. Game Termination Logic Completeness (`src/Awale/Env.jl`)
 
-### 2. Missing Transposition Table in MCTS
+- **Grand Slam Win Condition:** The `is_terminal` function needs explicit logic for an immediate win (e.g., capturing all opponent seeds, or achieving full board control). This condition must be checked *before* checking for move availability.
+- **Draw Detection (State History):** Implementing draw detection is critical. This must utilize the existing `history_hash` set within the `GameState` object to detect when a canonicalized state is encountered twice. A rule needs to be defined (e.g., 3 identical states) before declaring a draw and invoking a special termination signal that avoids counting it as a win/loss for score tracking.
 
-* **Location:** `src/Awale/MCTS.jl`
-* **Severity:** High
-* **Description:** The MCTS implementation currently uses a standard tree structure (`Dict{Int, MCTSNode}`). This violates the specification in `spec/05_mcts/README.md`. Without a transposition table, identical board positions reached via different move sequences are explored redundantly, severely limiting search efficiency and depth.
+### 2. MCTS Efficiency: Transposition Table Integration (`src/Awale/MCTS.jl`)
 
-### 3. Performance Bottlenecks (Excessive Allocations)
+The architecture is structurally sound, but the TT must be actively used in all three major node lifecycle functions:
 
-* **Location:** `src/Awale/Env.jl`, `src/Awale/Model.jl`
-* **Severity:** Medium
-* **Description:** The "hot path" of the search loop contains several allocation hotspots that will drastically slow down MCTS simulations:
-  * `simulate_move`: Frequent calls to `collect(s.board)` creating new vectors.
-  * `encode_state`: Multiple allocations during tensor preparation (array creation and `vcat`).
-  * `serialize_state`: Allocating a new `Vector{UInt8}` for every hash calculation.
+- **Key Generation:** A dedicated utility function, `hash_to_u64(canonicalized_state)`, must be created or confirmed to reliably map any canonical state representation to a unique `UInt64` key for dictionary lookup.
+- **Selection (`select_puct`):** When selecting the best child action, check if the resulting state's hash exists in the global TT. If found, use this cached value to adjust the UCT calculation ($Q_{cached}$ and $N_{cached}$) to bias selection toward historically valuable branches immediately.
+- **Expansion/Backup (`expand`, `backup`):** Every time a node is successfully expanded or backed up (i.e., after a move transition), the state's key must be written to, or updated in, the global TT with the latest aggregated $\langle Q_{total}, N_{visits} \rangle$ tuple.
+
+### 3. Performance: Hot-Path Allocations & Memory Usage
+
+The search loop (`Env.jl`, `MCTS.jl`) has several allocation hotspots that will cause excessive garbage collection overhead and performance degradation during deep simulations:
+
+- **State Simulation:** Avoid `collect(s.board)` in `simulate_move`. Instead, pass or work directly with the underlying `StaticArray` structures to generate the next state without creating redundant temporary vectors.
+- **Tensor Preparation:** Refactor `encode_state` and related tensor functions (`vcat`) to use optimized memory pooling or pre-allocated buffers (e.g., using `Base.fixed` types where possible) instead of generating intermediate arrays on every step.
 
 ---
 
-## 🚀 Required Next Steps
+## ⏳ Scheduled Start Date
 
-### Phase 1: Rule Alignment & Correctness
+**Work is paused until 2026-06-16.** The next steps detailed below will be executed on that date or later. Please review this plan and notify me when you are ready to resume the work.
 
-[ ] **Implement Grand Slam logic** in `is_terminal` (`src/Awale/Env.jl`).
-[ ] **Implement Repetition Detection**: Integrate a state tracking mechanism (using `history_hash`) to detect draws.
+---
 
-### Phase 2: MCTS Architectural Upgrade
+## 🚀 Actionable Next Steps Roadmap
 
-[ ] **Design and implement the Transposition Table**: Move from a simple tree to a global lookup table based on canonicalized state hashes.
-[ ] **Refactor `select_and_expand`** in `MCTS.jl` to utilize the transposition table for node retrieval.
+The effort should be structured into four distinct, sequential phases:
 
-### Phase 3: Hot-Path Optimization
+### Phase 1: Core Logic Fixes & State Completeness (High Priority)
 
-[ ] **Eliminate allocations in `simulate_move`**: Avoid `collect()` on StaticArrays; work with them directly or use pre-allocated buffers.
-[ ] **Optimize `encode_state`**: Refactor the state-to-tensor pipeline to minimize intermediate array creations.
-[ ] **Optimize `serialize_state`**: Implement a non-allocating serialization method for hashing.
+[ ] **Implement Grand Slam Win Condition:** Update `is_terminal` in `src/Awale/Env.jl` to check for explicit win conditions.
+[ ] **Implement Draw Detection:** Integrate draw logic into `is_terminal` using the existing state history (`Set{UInt64}`) mechanism in `GameState`.
 
-### Phase 4: Validation & Benchmarking
+### Phase 2: MCTS Architecture Upgrade (High Priority)
 
-[ ] **Add Property Tests** for the new terminal conditions (Grand Slam, Draws).
-[ ] **Benchmark MCTS search depth/speed** before and after Transposition Table and allocation optimizations to quantify improvement.
+[ ] **Utility Layer:** Implement/confirm the robust `hash_to_u64` function.
+[ ] **Integrate TT into Selection:** Refactor `select_puct` in `src/Awale/MCTS.jl` to query and bias UCT calculations using the transposition table cache (See Section 2 above).
+[ ] **Write to TT:** Modify both `expand` and `backup` functions in `src/Awale/MCTS.jl` to ensure the global TT is always updated after a successful state transition.
+
+### Phase 3: Hot-Path Optimization & Refactoring (Medium Priority)
+
+[ ] **Refactor State Simulation:** Optimize move simulation (`simulate_move`) by minimizing allocations, avoiding general `collect()` calls on fixed/static arrays.
+[ ] **Optimize Encoding:** Refactor state encoding functions to minimize memory churn during tensor construction in both `Env.jl` and `MCTS.jl`.
+
+### Phase 4: Validation & Benchmarking (Verification)
+
+[ ] **Unit Tests:** Add dedicated property tests for the new terminal conditions (Grand Slam, Draws).
+[ ] **Benchmark:** Run systematic benchmarks to quantify speed-up *after* implementing both TT caching and memory optimizations. This comparison must validate performance improvements against a baseline of pure theoretical MCTS search time vs. optimized implementation.
