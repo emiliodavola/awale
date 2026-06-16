@@ -3,7 +3,24 @@
 Resumen breve
 ------------
 
-Proyecto de investigación para desarrollar un sistema AlphaZero-like para Awale (Oware/Awari) en Julia. Enfoque: especificaciones formales → contratos → pruebas de propiedades → implementación. Este repositorio contiene la especificación completa en spec/ y un esqueleto de código en src/ con pruebas iniciales.
+Proyecto de investigación para desarrollar un sistema AlphaZero-like para Awale (Oware/Awari) en Julia. Enfoque: especificaciones formales → contratos → pruebas de propiedades → implementación. Este repositorio contiene la especificación completa en `spec/` y el código implementado en `src/`.
+
+🚀 Estado Actual (v2.1)
+------------------------
+
+**Fases 1, 2 y 3 han sido completadas exitosamente.**
+
+- ✅ **Core Logic & Termination:** Implementación de Grand Slam y detección de empates.
+- ✅ **MCTS Architecture:** Integración de la Transposition Table (TT) para optimización de búsqueda.
+- ✅ **Performance Optimization:** Reducción de asignaciones de memoria en los hot-paths.
+
+Siguientes pasos recomendados
+----------------------------
+
+1. **Phase 4: Validation & Benchmarking**
+   - Realizar pruebas de integridad de las nuevas reglas de terminación.
+   - Comparar el rendimiento (Win Rate) de un agente con TT vs. Vanilla MCTS.
+   - Ejecutar microbenchmarks para cuantificar el ahorro de memoria.
 
 Cómo ejecutar pruebas (desarrollo)
 --------------------------------
@@ -25,25 +42,18 @@ Recomendado: usar el entorno del proyecto de Julia.
 Estructura clave
 ----------------
 
-- spec/: especificaciones formales y contratos (autoritativo)
-- src/: código fuente (módulos: Awale/State, Awale/Env, Awale/Utils)
-- test/: pruebas unitarias y de invariantes
-- .github/: CI y copilot-instructions
+- `spec/`: especificaciones formales y contratos (autoritativo)
+- `src/`: código fuente (módulos: `Awale/State`, `Awale/Env`, `Awale/MCTS`, `Awale/Model`, `Awale/Training`, `Awale/Utils`)
+- `test/`: pruebas unitarias y de invariantes
+- `.github/`: CI y copilot-instructions
 
 Flujo de trabajo (gitflow)
 -------------------------
 
-- Ramas permanentes: main (estable), dev (integración)
-- Crear feature branches desde dev: feature/<nombre>
-
-Siguientes pasos recomendados
-----------------------------
-
-1. Completar property-based tests y fixtures (Phase 1 finalizar)
-2. Implementar transición de reglas y pruebas de integridad (Phase 2)
-3. Reintroducir StaticArrays/Flux y preparar entorno reproducible (Project/Manifest)
+- Ramas permanentes: `main` (estable), `dev` (integración)
+- Crear feature branches desde `dev`: `feature/<nombre>`
 
 Contacto
 -------
 
-Mantené la especificación en spec/ como fuente de verdad antes de cambiar la lógica.
+Mantén la especificación en `spec/` como fuente de verdad antes de cambiar la lógica.
