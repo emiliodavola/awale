@@ -30,3 +30,6 @@ skills-lock.json
 .agents/
 .claude/
 config.json
+*.onnx
+*.safetensors
+!model/config.json

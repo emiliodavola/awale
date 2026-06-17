@@ -65,4 +65,4 @@ Flujo de trabajo (gitflow)
 Contacto
 -------
 
-Mantén la especificación en `spec/` como fuente de verdad antes de cambiar la lógica.
+\n## HuggingFace Model\n-------------------\n\nPara el modelo de red neuronal convertido a PyTorch/ONNX (disponible en HuggingFace), consulte `model/README.md`.\n
