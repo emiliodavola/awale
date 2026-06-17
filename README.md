@@ -13,7 +13,6 @@ Proyecto de investigación para desarrollar un sistema AlphaZero-like para Awale
 - ✅ **Performance Optimization:** Reducción de asignaciones de memoria en los hot-paths.
 
 ### Configuración del Proyecto
-------------------------
 
 El sistema utiliza un archivo de configuración para la experimentación masiva que debe seguir el formato de `config.json.example`
 
