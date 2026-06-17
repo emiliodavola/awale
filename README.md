@@ -1,12 +1,10 @@
 # Awale — Specification-driven Awale (Oware) RL (Julia)
 
-Resumen breve
-------------
+## Resumen breve
 
 Proyecto de investigación para desarrollar un sistema AlphaZero-like para Awale (Oware/Awari) en Julia. Enfoque: especificaciones formales → contratos → pruebas de propiedades → implementación. Este repositorio contiene la especificación completa en `spec/` y el código implementado en `src/`.
 
-🚀 Estado Actual (v2.1)
-------------------------
+## 🚀 Estado Actual (v2.1)
 
 **Fases 1, 2 y 3 han sido completadas exitosamente.**
 
@@ -14,7 +12,7 @@ Proyecto de investigación para desarrollar un sistema AlphaZero-like para Awale
 - ✅ **MCTS Architecture:** Integración de la Transposition Table (TT) para optimización de búsqueda.
 - ✅ **Performance Optimization:** Reducción de asignaciones de memoria en los hot-paths.
 
-## Configuración del Proyecto
+### Configuración del Proyecto
 ------------------------
 
 El sistema utiliza un archivo de configuración para la experimentación masiva que debe seguir el formato de `config.json.example`
@@ -23,16 +21,14 @@ El sistema utiliza un archivo de configuración para la experimentación masiva 
 cp config.json.example config.json
 ```
 
-Siguientes pasos recomendados
-----------------------------
+## Siguientes pasos recomendados
 
 1. **Phase 4: Validation & Benchmarking**
    - Realizar pruebas de integridad de las nuevas reglas de terminación.
    - Comparar el rendimiento (Win Rate) de un agente con TT vs. Vanilla MCTS.
    - Ejecutar microbenchmarks para cuantificar el ahorro de memoria.
 
-Cómo ejecutar pruebas (desarrollo)
---------------------------------
+## Cómo ejecutar pruebas (desarrollo)
 
 Recomendado: usar el entorno del proyecto de Julia.
 
@@ -48,21 +44,14 @@ Recomendado: usar el entorno del proyecto de Julia.
   julia --project=. test/runtests.jl
   ```
 
-Estructura clave
-----------------
+## Estructura clave
 
 - `spec/`: especificaciones formales y contratos (autoritativo)
 - `src/`: código fuente (módulos: `Awale/State`, `Awale/Env`, `Awale/MCTS`, `Awale/Model`, `Awale/Training`, `Awale/Utils`)
 - `test/`: pruebas unitarias y de invariantes
 - `.github/`: CI y copilot-instructions
 
-Flujo de trabajo (gitflow)
--------------------------
+## Flujo de trabajo (gitflow)
 
 - Ramas permanentes: `main` (estable), `dev` (integración)
 - Crear feature branches desde `dev`: `feature/<nombre>`
-
-Contacto
--------
-
-\n## HuggingFace Model\n-------------------\n\nPara el modelo de red neuronal convertido a PyTorch/ONNX (disponible en HuggingFace), consulte `model/README.md`.\n
