@@ -14,11 +14,7 @@ Proyecto de investigación para desarrollar un sistema AlphaZero-like para Awale
 
 ### Configuración del Proyecto
 
-El sistema utiliza un archivo de configuración para la experimentación masiva que debe seguir el formato de `config.json.example`
-
-```bash
-cp config.json.example config.json
-```
+El sistema utiliza `config.toml` como única configuración de runtime para entrenamiento, evaluación y juego. Ajustalo directamente según tu corrida.
 
 ## Siguientes pasos recomendados
 
