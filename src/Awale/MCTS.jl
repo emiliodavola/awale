@@ -1,8 +1,9 @@
 module MCTS
 
-using ..State: GameState, canonicalize
+using ..State: GameState, canonicalize, serialize_state
 using ..Env: legal_actions, transition, is_terminal, reward
 using ..Model: predict
+using ..Utils: fnv1a64
 using Random
 using Flux: softmax
 
@@ -10,7 +11,7 @@ export MCTSSearch, search, search_with_stats
 
 struct MCTSNode
     state::GameState
-    prior::Float32 
+    prior::Float32
     visits::Ref{Int64}
     value_sum::Ref{Float32}
     children::Dict{Int, MCTSNode}
@@ -23,79 +24,99 @@ end
 struct MCTSSearch
     model
     c_puct::Float32
-    # Transposition Table: Maps canonical state hash to the best known value (Q) and visit count (N) for optimization lookup
-    transposition_table::Dict{UInt64, Tuple{Float32, Int64}} 
+    transposition_table::Dict{UInt64, Tuple{Float32, Int64}}
 end
 
-function search(mcts::MCTSSearch, root_state::GameState, num_sims::Int, rng=Random.default_rng())
-    action, _ = search_with_stats(mcts, root_state, num_sims, rng)
+function transposition_key(state::GameState)::UInt64
+    bytes = serialize_state(state)
+    for past_hash in sort!(collect(state.history_hashes))
+        for shift in 0:8:56
+            push!(bytes, UInt8((past_hash >> shift) & 0xff))
+        end
+    end
+    return fnv1a64(bytes)
+end
+
+function search(mcts::MCTSSearch, root_state::GameState, num_sims::Int, rng=Random.default_rng(); add_root_noise::Bool=false)
+    action, _ = search_with_stats(mcts, root_state, num_sims, rng; add_root_noise=add_root_noise)
     return action
 end
 
-function search_with_stats(mcts::MCTSSearch, root_state::GameState, num_sims::Int, rng=Random.default_rng())
+function legal_action_priors(logits::AbstractVector{<:Real}, actions::Vector{Int})
+    mask = fill(-Inf32, length(logits))
+    for action in actions
+        mask[action] = Float32(logits[action])
+    end
+
+    probs = softmax(mask)
+    priors = Float32[probs[action] for action in actions]
+    total = sum(priors)
+
+    if total <= 1.0f-8
+        return fill(1.0f0 / length(actions), length(actions))
+    end
+
+    return priors ./ total
+end
+
+function search_with_stats(
+    mcts::MCTSSearch,
+    root_state::GameState,
+    num_sims::Int,
+    rng=Random.default_rng();
+    add_root_noise::Bool=false,
+)
+    empty!(mcts.transposition_table)
 
     root = MCTSNode(canonicalize(root_state))
-
     actions = legal_actions(root.state)
     if isempty(actions)
-        return 0, Float32[]
+        return 0, zeros(Float32, 6)
     end
 
     logits, _ = predict(mcts.model, root.state)
-    logits = vec(logits)  # 🔥 obligatorio
+    root_priors = legal_action_priors(vec(logits), actions)
 
-    probs = softmax(logits)  # 🔥 SOLO ESTO
+    if add_root_noise
+        dir_noise = generate_dirichlet(rng, length(actions), 0.3f0)
+        epsilon = 0.25f0
+        root_priors = ((1.0f0 - epsilon) .* root_priors) .+ (epsilon .* dir_noise)
+        root_priors ./= sum(root_priors)
+    end
 
-    dir_noise = generate_dirichlet(rng, length(probs), 0.3f0)
-    epsilon = 0.25f0
-
-    root_priors = (1f0 - epsilon) .* probs .+ epsilon .* dir_noise
-
-    for action in actions
-        s_next = transition(root.state, action)
-        root.children[action] = MCTSNode(canonicalize(s_next), root_priors[action])
+    for (idx, action) in enumerate(actions)
+        next_state = transition(root.state, action)
+        root.children[action] = MCTSNode(canonicalize(next_state), root_priors[idx])
     end
 
     for _ in 1:num_sims
         leaf, path = select_and_expand(mcts, root)
-
-        val = if is_terminal(leaf.state)
+        leaf_value = if is_terminal(leaf.state)
             reward(leaf.state)
         else
-            _, v = predict(mcts.model, leaf.state)
-            v
+            _, value = predict(mcts.model, leaf.state)
+            value
         end
-
-        backup(path, val, mcts)
+        backup(path, leaf_value, mcts)
     end
 
     counts = zeros(Float32, 6)
     total_visits = sum(node.visits[] for node in values(root.children))
-
     for (action, node) in root.children
         counts[action] = node.visits[] / max(1, total_visits)
     end
 
-    best_action = 0
-    max_visits = -1
-
-    for (action, node) in root.children
-        if node.visits[] > max_visits
-            max_visits = node.visits[]
-            best_action = action
-        end
-    end
-
+    best_action = argmax(counts)
     return best_action, counts
 end
 
 function generate_dirichlet(rng, n, alpha)
     samples = Float32[]
-    for i in 1:n
+    for _ in 1:n
         push!(samples, sample_gamma(rng, alpha))
     end
-    s = sum(samples)
-    return samples ./ s
+    total = sum(samples)
+    return samples ./ total
 end
 
 function sample_gamma(rng, alpha)
@@ -107,114 +128,86 @@ function sample_gamma(rng, alpha)
     while true
         x = Float32(randn(rng))
         v = (1.0f0 + c * x)^3
-        if v <= 0 return sample_gamma(rng, alpha) end
+        if v <= 0
+            return sample_gamma(rng, alpha)
+        end
         u = Float32(rand(rng))
-        if u < 1.0f0 - 0.0331 * x^4; return d * v; end
-        if log(u) < 0.5 * x^2 + d * (1.0f0 - v + log(v)); return d * v; end
+        if u < 1.0f0 - 0.0331f0 * x^4
+            return d * v
+        end
+        if log(u) < 0.5f0 * x^2 + d * (1.0f0 - v + log(v))
+            return d * v
+        end
     end
 end
 
 function select_and_expand(mcts::MCTSSearch, root::MCTSNode)
     path = MCTSNode[]
-    curr = root
+    current = root
     while true
-        push!(path, curr)
-        if is_terminal(curr.state)
-            return curr, path
+        push!(path, current)
+        if is_terminal(current.state)
+            return current, path
         end
-        if isempty(curr.children)
-            expand(mcts, curr)
-            return curr, path 
+        if isempty(current.children)
+            expand(mcts, current)
+            return current, path
         end
-        action = select_puct(mcts, curr)
-        curr = curr.children[action]
+        action = select_puct(mcts, current)
+        current = current.children[action]
     end
 end
 
 function expand(mcts::MCTSSearch, node::MCTSNode)
     actions = legal_actions(node.state)
-    if isempty(actions)
-        return
-    end
+    isempty(actions) && return
 
     logits, _ = predict(mcts.model, node.state)
-    logits = vec(logits)
+    priors = legal_action_priors(vec(logits), actions)
 
-    mask = zeros(Float32, 6)
-    for a in actions
-        mask[a] = 1f0
-    end
-
-    logits .= logits .+ log.(mask .+ 1e-8)
-
-    probs = softmax(logits)
-
-    # solo probabilidades legales
-    legal_probs = Float32[]
-    for a in actions
-        push!(legal_probs, probs[a])
-    end
-
-    s = sum(legal_probs)
-    if s < 1e-8
-        legal_probs .= 1f0 / length(legal_probs)
-    else
-        legal_probs ./= s
-    end
-
-    for (i, action) in enumerate(actions)
-        s_next = transition(node.state, action)
-        child_state = canonicalize(s_next)
-        prior = legal_probs[i]
-        
-        if haskey(mcts.transposition_table, child_state.history_hash)
-            (q_cached, n_cached) = mcts.transposition_table[child_state.history_hash]
-            # We can initialize the child node with cached knowledge if applicable
-            # But for a clean MCTS, we typically just expand and rely on select_puct's TT usage.
-        end
-        
-        node.children[action] = MCTSNode(child_state, prior)
+    for (idx, action) in enumerate(actions)
+        next_state = transition(node.state, action)
+        child_state = canonicalize(next_state)
+        node.children[action] = MCTSNode(child_state, priors[idx])
     end
 end
 
 function select_puct(mcts::MCTSSearch, node::MCTSNode)
-    best_u = -Float32(Inf)
-    best_a = 0
-    n_parent = node.visits[]
+    best_score = -Float32(Inf)
+    best_action = 0
+    parent_visits = max(1, node.visits[])
+
     for (action, child) in node.children
-        # Check Transposition Table for cached statistics
-        q = child.value_sum[] / max(1, child.visits[])
-        n = child.visits[]
-        
-        if haskey(mcts.transposition_table, child.state.history_hash)
-            (q_cached, n_cached) = mcts.transposition_table[child.state.history_hash]
-            # Use cached values to bias selection toward historically valuable branches
-            u = q_cached + mcts.c_puct * child.prior * sqrt(n_parent) / (1 + n_cached)
+        q_value = child.value_sum[] / max(1, child.visits[])
+        child_visits = child.visits[]
+        child_key = transposition_key(child.state)
+
+        if haskey(mcts.transposition_table, child_key)
+            cached_q, cached_visits = mcts.transposition_table[child_key]
+            score = -cached_q + mcts.c_puct * child.prior * sqrt(parent_visits) / (1 + cached_visits)
         else
-            u = q + mcts.c_puct * child.prior * sqrt(n_parent) / (1 + n)
+            score = -q_value + mcts.c_puct * child.prior * sqrt(parent_visits) / (1 + child_visits)
         end
-        
-        if u > best_u
-            best_u = u
-            best_a = action
+
+        if score > best_score
+            best_score = score
+            best_action = action
         end
     end
-    return best_a
+
+    return best_action
 end
 
-function backup(path::Vector{MCTSNode}, leaf_val::Float32, mcts::MCTSSearch)
-    v = leaf_val
-    for i in length(path):-1:1
-        node = path[i]
+function backup(path::Vector{MCTSNode}, leaf_value::Float32, mcts::MCTSSearch)
+    value = leaf_value
+    for idx in length(path):-1:1
+        node = path[idx]
         node.visits[] += 1
-        node.value_sum[] += v
-        
-        # Update Transposition Table with aggregated value and visits
-        q_avg = node.value_sum[] / node.visits[]
-        n_total = node.visits[]
-        mcts.transposition_table[node.state.history_hash] = (q_avg, n_total)
-        
-        v = -v
+        node.value_sum[] += value
+
+        average_q = node.value_sum[] / node.visits[]
+        mcts.transposition_table[transposition_key(node.state)] = (average_q, node.visits[])
+        value = -value
     end
 end
 

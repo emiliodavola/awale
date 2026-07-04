@@ -1,6 +1,6 @@
 module Model
 
-using YAML
+using TOML
 using Flux
 using Serialization
 using ..State: GameState, canonicalize, encode_state
@@ -17,24 +17,27 @@ end
 # Use @layer for Flux >= 0.15 to avoid deprecation warnings and ensure parameter tracking
 Flux.@layer AwaleModel
 
-function create_model(config_path::String="src/Awale/config.yaml")
-    config = YAML.load_file(config_path)
+function create_model(config_path::String="src/Awale/config.toml")
+    config = TOML.parsefile(config_path)
     model_cfg = config["model"]
-    
-    # Mapping activation names from YAML to Flux functions
-    act_map = Dict("relu"=>relu, "tanh"=>tanh, "identity"=>identity)
-    
-    shared_layers = [Dense(m["in"] => m["out"], act_map[m["activation"]]) for m in model_cfg["layers"]["shared"]]
-    policy_layers = [Dense(m["in"] => m["out"], act_map[m["activation"]]) for m in model_cfg["layers"]["policy"]]
-    value_layers = [Dense(m["in"] => m["out"], act_map[m["activation"]]) for m in model_cfg["layers"]["value"]]
-    
+
+    act_map = Dict(
+        "relu" => relu,
+        "tanh" => tanh,
+        "identity" => identity,
+    )
+
+    shared_layers = [Dense(layer["in"] => layer["out"], act_map[layer["activation"]]) for layer in model_cfg["layers"]["shared"]]
+    policy_layers = [Dense(layer["in"] => layer["out"], act_map[layer["activation"]]) for layer in model_cfg["layers"]["policy"]]
+    value_layers = [Dense(layer["in"] => layer["out"], act_map[layer["activation"]]) for layer in model_cfg["layers"]["value"]]
+
     return AwaleModel(Chain(shared_layers...), Chain(policy_layers...), Chain(value_layers...))
 end
 
 function predict_raw(model::AwaleModel, X::AbstractMatrix{Float32})
     shared_out = model.shared(X)
     logits = model.policy(shared_out)
-    value  = model.value(shared_out)
+    value = model.value(shared_out)
     return logits, value
 end
 

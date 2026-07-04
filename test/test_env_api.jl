@@ -41,4 +41,24 @@ using .Awale
 
     @test s_cap_next.captured[1] >= 3
     @test Awale.validate_invariants(s_cap_next)
+
+    board_p2_cap = SVector{12, UInt8}(
+        UInt8[1,1,0,0,0,0, 0,0,0,0,0,2]
+    )
+
+    s_p2_cap = Awale.GameState(
+        board_p2_cap,
+        Int8(2),
+        (UInt8(22), UInt8(22)),
+        UInt64(0),
+        Awale.GameConfig(),
+        Set{UInt64}()
+    )
+
+    s_p2_next = Awale.transition(s_p2_cap, 6)
+
+    @test s_p2_next.captured[2] == 26
+    @test s_p2_next.board[1] == 0
+    @test s_p2_next.board[2] == 0
+    @test Awale.validate_invariants(s_p2_next)
 end

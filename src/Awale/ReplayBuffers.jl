@@ -1,9 +1,9 @@
-module ReplayBuffer
+module ReplayBuffers
 
 using ..State: GameState
 using Random
 
-export Experience, ReplayBuffer, push_experience!, sample_batch!
+export Experience, ReplayBuffer, push_experience!, sample_batch
 
 struct Experience
     state::GameState
@@ -21,8 +21,10 @@ function ReplayBuffer(capacity::Int)
     return ReplayBuffer(capacity, Experience[], 1)
 end
 
+Base.length(rb::ReplayBuffer) = length(rb.buffer)
+
 function push_experience!(rb::ReplayBuffer, exp::Experience)
-    if length(rb.buffer) < rb.capacity
+    if length(rb) < rb.capacity
         push!(rb.buffer, exp)
     else
         rb.buffer[rb.cursor] = exp
@@ -30,13 +32,13 @@ function push_experience!(rb::ReplayBuffer, exp::Experience)
     end
 end
 
-function sample_batch!(rb::ReplayBuffer, batch_size::Int, rng=Random.default_rng())::Vector{Experience}
+function sample_batch(rb::ReplayBuffer, batch_size::Int, rng=Random.default_rng())::Vector{Experience}
     if isempty(rb.buffer)
         return Experience[]
     end
-    
-    actual_batch_size = min(batch_size, length(rb.buffer))
-    indices = sample(rng, 1:length(rb.buffer), actual_batch_size, replace=false)
+
+    actual_batch_size = min(batch_size, length(rb))
+    indices = randperm(rng, length(rb))[1:actual_batch_size]
     return [rb.buffer[i] for i in indices]
 end
 

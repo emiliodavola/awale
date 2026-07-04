@@ -48,7 +48,7 @@ function simulate_move(s::GameState, action::Int)
             captured += board_vec[temp_pos]
             board_vec[temp_pos] = 0
             temp_pos = (temp_pos - 2 + 12) % 12 + 1
-            is_opp = (current_p == 1) ? (7 <= temp_pos <= 12) : (1 <= pos <= 6)
+            is_opp = (current_p == 1) ? (7 <= temp_pos <= 12) : (1 <= temp_pos <= 6)
         end
     end
     return SVector{12,UInt8}(board_vec), captured
@@ -124,10 +124,9 @@ function is_terminal(s::GameState)::Bool
         return true
     end
 
-    # 2. Draw Detection (Repetition)
-    # If the current state's hash has already been seen in the history, it's a draw.
+    # 2. Repetition handling depends on the configured policy.
     if s.history_hash in s.history_hashes
-        return true
+        return s.config.repetition != :revert
     end
 
     # 3. End of Game (No legal moves)
@@ -139,6 +138,10 @@ function is_terminal(s::GameState)::Bool
 end
 
 function reward(s::GameState)::Float32
+    if s.history_hash in s.history_hashes && s.config.repetition == :draw_on_repeat
+        return 0.0f0
+    end
+
     p1_score = s.captured[1]
     p2_score = s.captured[2]
     if p1_score > p2_score

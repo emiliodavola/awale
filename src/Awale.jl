@@ -7,6 +7,7 @@ include("Awale/State.jl")
 include("Awale/Env.jl")
 include("Awale/Model.jl")
 include("Awale/MCTS.jl")
+include("Awale/ReplayBuffers.jl")
 include("Awale/Training.jl")
 include("Awale/Evaluation.jl")
 
@@ -15,6 +16,7 @@ using .State
 using .Env
 using .Model
 using .MCTS
+using .ReplayBuffers
 using .Training
 using .Evaluation
 
