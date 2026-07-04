@@ -25,11 +25,14 @@ Thumbs.db
 .DS_Store
 # Model weights and checkpoints
 *.bin
-ncheckpoints/
+checkpoints/
 skills-lock.json
 .agents/
 .claude/
+.pi/
 config.json
 *.onnx
 *.safetensors
 !model/config.json
+# Local Pi runtime state
+.atl/
