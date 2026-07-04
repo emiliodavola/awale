@@ -48,17 +48,17 @@ Este documento define el orden de implementación y decisiones técnicas obligat
 
 **Solo ejecutable tras completar Fases 1, 2 y 3.**
 
-#### Candidatos a evaluar:
+#### Candidatos a evaluar
 
 * **A) MLP Baseline:** Arquitectura de Fase 2.
 * **B) MLP Escalada (Opcional):** Mismo diseño, mayor densidad de neuronas.
-* **C) ResNet1D Pequeña:** 
+* **C) ResNet1D Pequeña:**
   * `Conv1D` + 4 bloques residuales.
   * Canales: $32$ – $64$.
   * Input: Tensor $(C, 12)$.
   * Circular Padding (opcional).
 
-#### Métricas obligatorias:
+#### Métricas obligatorias
 
 1. **Elo Relativo:** Contra un baseline fijo.
 2. **Sample Efficiency:** Ganancia de Elo por cada $N$ partidas de Self-play.

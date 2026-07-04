@@ -95,7 +95,6 @@ Implement property tests in `test/` before implementing logic:
 3. Canonicalization idempotence.
 4. Serialization roundtrip.
 
-
 ## Experimental Development Protocol
 
 To ensure the project evolves through evidence-based optimization rather than architectural assumptions, the following phased approach and rules must be strictly followed.
@@ -104,33 +103,35 @@ To ensure the project evolves through evidence-based optimization rather than ar
 
 Development must proceed through the following phases. **Do not skip or reorder these phases.**
 
-1.  **PHASE 1: State Encoding (CRITICAL/BLOCKING)**
-    *   Transition from flat vector representations to structured tensors.
-    *   Required shape: `(C, 12)`.
-    *   Goal: Enable spatial/convolutional processing without premature architectural changes.
-2.  **PHASE 2: Strong MLP Baseline (CONTROL EXPERIMENTAL)**
-    *   Establish a competitive baseline using a scaled MLP ($\approx 150k-300k$ params).
-    *   Purpose: Determine if current performance is limited by model capacity or data/search.
-3.  **PHASE 3: Self-play + MCTS Scaling (DATA DRIVER)**
-    *   Scale the data volume to ensure the model is the bottleneck, not the search budget.
-    *   **Constraint:** All architecture comparisons must use identical MCTS and Self-play budgets.
-4.  **PHASE 4: Architectural Benchmarking (CONTROLLED COMPARISON)**
-    *   Only permitted after Phase 3 is complete.
-    *   Compare MLP (Phase 2) against ResNet1D (Small/Medium) using the encoded tensor.
-    *   Testing requires: Circular padding (optional initially) and identical training pipelines.
+1. **PHASE 1: State Encoding (CRITICAL/BLOCKING)**
+    - Transition from flat vector representations to structured tensors.
+    - Required shape: `(C, 12)`.
+    - Goal: Enable spatial/convolutional processing without premature architectural changes.
+2. **PHASE 2: Strong MLP Baseline (CONTROL EXPERIMENTAL)**
+    - Establish a competitive baseline using a scaled MLP ($\approx 150k-300k$ params).
+    - Purpose: Determine if current performance is limited by model capacity or data/search.
+3. **PHASE 3: Self-play + MCTS Scaling (DATA DRIVER)**
+    - Scale the data volume to ensure the model is the bottleneck, not the search budget.
+    - **Constraint:** All architecture comparisons must use identical MCTS and Self-play budgets.
+4. **PHASE 4: Architectural Benchmarking (CONTROLLED COMPARISON)**
+    - Only permitted after Phase 3 is complete.
+    - Compare MLP (Phase 2) against ResNet1D (Small/Medium) using the encoded tensor.
+    - Testing requires: Circular padding (optional initially) and identical training pipelines.
 
 ### Decision Rules & Metrics
 
 Decisions are strictly driven by the following metrics:
-*   **Sample Efficiency:** $\Delta$ Elo vs. $\Delta$ Self-play games.
-*   **Policy Entropy:** Convergence rate of the policy distribution.
-*   **Value Stability:** Variance of Value Loss during training.
-*   **Win-rate in Controlled Arena:** Performance under identical MCTS constraints.
+
+- **Sample Efficiency:** $\Delta$ Elo vs. $\Delta$ Self-play games.
+- **Policy Entropy:** Convergence rate of the policy distribution.
+- **Value Stability:** Variance of Value Loss during training.
+- **Win-rate in Controlled Arena:** Performance under identical MCTS constraints.
 
 **Decision Outcomes:**
-*   `MLP Escalada suficiente`: If gains from complex architectures are marginal.
-*   `ResNet1D mejora sample efficiency`: If ResNet demonstrates superior convergence/Elo per unit of data.
-*   `Encoding factor dominante`: If performance gains are primarily linked to the tensor encoding.
-*   `Self-play/MCTS dominante`: If scaling data/search yields gains that architecture cannot match.
+
+- `MLP Escalada suficiente`: If gains from complex architectures are marginal.
+- `ResNet1D mejora sample efficiency`: If ResNet demonstrates superior convergence/Elo per unit of data.
+- `Encoding factor dominante`: If performance gains are primarily linked to the tensor encoding.
+- `Self-play/MCTS dominante`: If scaling data/search yields gains that architecture cannot match.
 
 ---
