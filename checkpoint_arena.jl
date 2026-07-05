@@ -14,7 +14,6 @@ CHECKPOINT_DIR = String(training_cfg["checkpoint_dir"])
 C_PUCT = Float32(mcts_cfg["c_puct"])
 DEFAULT_GAMES = 200
 DEFAULT_SIMS = [0, 50, 200]
-DEFAULT_MATCHUPS = [(1, 5), (5, 10), (10, 25), (25, 5)]
 DEFAULT_OPENING_PLIES = [0, 2, 4, 6]
 OPENINGS_PER_PLY = 4
 OPENING_SEED = 20260705
@@ -40,6 +39,10 @@ end
 function existing_checkpoint_labels()
     labels = Any[]
 
+    if !isdir(CHECKPOINT_DIR)
+        return labels
+    end
+
     for entry in readdir(CHECKPOINT_DIR)
         match_result = match(r"model_iter_(\d+)\.bin", entry)
         if match_result !== nothing
@@ -57,23 +60,11 @@ function existing_checkpoint_labels()
 end
 
 function available_matchups()
-    existing = Set(existing_checkpoint_labels())
-    matchups = Tuple[]
+    numeric_labels = sort([label for label in existing_checkpoint_labels() if label isa Int])
+    matchups = Tuple{Int, Int}[]
 
-    for matchup in DEFAULT_MATCHUPS
-        if matchup[1] in existing && matchup[2] in existing
-            push!(matchups, matchup)
-        end
-    end
-
-    numeric_labels = sort([label for label in existing if label isa Int])
-    if isempty(matchups) && length(numeric_labels) >= 2
-        for idx in 1:(length(numeric_labels) - 1)
-            push!(matchups, (numeric_labels[idx], numeric_labels[idx + 1]))
-        end
-        if length(numeric_labels) >= 3
-            push!(matchups, (numeric_labels[end], numeric_labels[1]))
-        end
+    for idx in 1:(length(numeric_labels) - 1)
+        push!(matchups, (numeric_labels[idx], numeric_labels[idx + 1]))
     end
 
     return matchups

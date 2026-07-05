@@ -213,6 +213,10 @@ end
         play_module = Module(:PlaySmoke)
         arena_module = Module(:ArenaSmoke)
 
+        Core.eval(Main, :(TrainSmoke2 = $train_module))
+        Core.eval(Main, :(EvalSmoke = $eval_module))
+        Core.eval(Main, :(PlaySmoke = $play_module))
+        Core.eval(Main, :(ArenaSmoke = $arena_module))
         Core.eval(train_module, :(include(path) = Base.include($(train_module), path)))
         Core.eval(eval_module, :(include(path) = Base.include($(eval_module), path)))
         Core.eval(play_module, :(include(path) = Base.include($(play_module), path)))
@@ -233,5 +237,33 @@ end
         openings_b = arena_module.generate_opening_suite(seed=123, openings_per_ply=2)
         @test length(openings_a) == 8
         @test [arena_module.Awale.serialize_state(s) for s in openings_a] == [arena_module.Awale.serialize_state(s) for s in openings_b]
+
+        original_checkpoint_dir = arena_module.CHECKPOINT_DIR
+        mktempdir() do tmpdir
+            for iter in (5, 10, 25, 26, 27)
+                touch(joinpath(tmpdir, "model_iter_$(iter).bin"))
+            end
+            touch(joinpath(tmpdir, "model_last.bin"))
+            touch(joinpath(tmpdir, "model_best.bin"))
+            touch(joinpath(tmpdir, "model_final.bin"))
+            arena_module.CHECKPOINT_DIR = tmpdir
+            @test arena_module.available_matchups() == [(5, 10), (10, 25), (25, 26), (26, 27)]
+        end
+
+        mktempdir() do tmpdir
+            arena_module.CHECKPOINT_DIR = joinpath(tmpdir, "missing")
+            @test arena_module.existing_checkpoint_labels() == Any[]
+            @test arena_module.available_matchups() == Tuple{Int, Int}[]
+            output = mktemp() do path, io
+                redirect_stdout(io) do
+                    arena_module.main()
+                end
+                flush(io)
+                close(io)
+                read(path, String)
+            end
+            @test occursin("No hay suficientes checkpoints compatibles para correr el arena.", output)
+        end
+        arena_module.CHECKPOINT_DIR = original_checkpoint_dir
     end
 end
