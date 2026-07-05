@@ -1,5 +1,5 @@
 using BenchmarkTools
-include("src/Awale.jl")
+include("../src/Awale.jl")
 using .Awale.State
 using .Awale.MCTS
 using .Awale.Model

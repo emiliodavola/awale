@@ -18,6 +18,7 @@ El sistema utiliza `config.toml` como única configuración de runtime para entr
 - `baseline_eval.jl` — evalúa un checkpoint contra `RandomAgent` y `HeuristicAgent`.
 - `checkpoint_arena.jl` — compara checkpoints entre sí con `0`, `50` y `200` simulaciones.
 - `play.jl` — corre partidas de exhibición con logs de tablero.
+- `scripts/benchmarks.jl` — microbenchmarks de hot paths (`encode_state`, `select_puct`, `backup`).
 
 ## Hoja de ruta experimental
 
@@ -97,12 +98,21 @@ Usalo para responder si hay progreso real entre checkpoints de la misma pipeline
 julia --project=. .\play.jl
 ```
 
+### 7. Microbenchmarks
+
+```powershell
+julia --project=. .\scripts\benchmarks.jl
+```
+
+Usalo solo para medir hot paths y comparar impacto de cambios de performance.
+
 ## Estructura clave
 
 - `spec/`: especificaciones formales y contratos (autoritativo)
 - `src/`: código fuente (módulos: `Awale/State`, `Awale/Env`, `Awale/MCTS`, `Awale/Model`, `Awale/Training`, `Awale/Utils`)
 - `test/`: pruebas unitarias, invariantes y regresión
 - `checkpoints/`: modelos y estado de entrenamiento
+- `scripts/`: entrypoints auxiliares como microbenchmarks
 - `.github/`: CI
 
 ## Flujo de trabajo (gitflow)
