@@ -143,16 +143,68 @@ end
         @test length(replay_buffer) > 0
     end
 
-    @testset "training snapshot policy preserves milestone checkpoints" begin
+    @testset "training snapshot policy writes only milestone snapshots" begin
         train_module = Module(:TrainSmoke)
+        Core.eval(Main, :(TrainSmoke = $train_module))
         Core.eval(train_module, :(include(path) = Base.include($(train_module), path)))
         Base.include(train_module, joinpath(@__DIR__, "..", "train.jl"))
 
-        @test train_module.should_save_snapshot(1, 25, [1, 5, 10, 25])
-        @test train_module.should_save_snapshot(5, 25, [1, 5, 10, 25])
-        @test train_module.should_save_snapshot(10, 25, [1, 5, 10, 25])
-        @test train_module.should_save_snapshot(25, 25, [1, 5, 10, 25])
-        @test !train_module.should_save_snapshot(2, 25, [1, 5, 10, 25])
+        @test train_module.should_save_snapshot(1, 25, 25)
+        @test train_module.should_save_snapshot(2, 25, 25)
+        @test train_module.should_save_snapshot(4, 25, 25)
+        @test train_module.should_save_snapshot(8, 25, 25)
+        @test train_module.should_save_snapshot(16, 25, 25)
+        @test train_module.should_save_snapshot(25, 25, 25)
+        @test !train_module.should_save_snapshot(3, 25, 25)
+        @test !train_module.should_save_snapshot(24, 25, 25)
+        @test !train_module.should_save_snapshot(27, 27, 25)
+
+        mktempdir() do tmpdir
+            checkpoint_dir = joinpath(tmpdir, "checkpoints")
+            mkpath(checkpoint_dir)
+            train_module.CHECKPOINT_DIR = checkpoint_dir
+            train_module.LAST_CHECKPOINT_PATH = joinpath(checkpoint_dir, "model_last.bin")
+            train_module.BEST_CHECKPOINT_PATH = joinpath(checkpoint_dir, "model_best.bin")
+            train_module.CHECKPOINT_PATH = joinpath(checkpoint_dir, "model_final.bin")
+            train_module.STATE_PATH = joinpath(checkpoint_dir, "training_state.toml")
+            train_module.NUM_ITERATIONS = 27
+            train_module.GAMES_PER_ITERATION = 1
+            train_module.SIMS_PER_MOVE = 1
+            train_module.BATCH_SIZE = 8
+            train_module.UPDATES_PER_ITERATION = 1
+            train_module.TEMPERATURE_MOVES = 2
+            train_module.CHECKPOINT_EVERY = 25
+            train_module.EVAL_GAMES = 2
+            train_module.SIMS_PER_EVAL = 1
+
+            Random.seed!(1234)
+            train_module.save_model(train_module.Awale.create_model(), train_module.LAST_CHECKPOINT_PATH)
+            train_module.write_training_state(train_module.STATE_PATH, 24, 0.0)
+            first_output = mktemp() do path, io
+                redirect_stdout(io) do
+                    train_module.main(String[])
+                end
+                flush(io)
+                close(io)
+                read(path, String)
+            end
+
+            @test occursin("Reanudando desde la iteración 24", first_output)
+            @test isfile(joinpath(checkpoint_dir, "model_iter_25.bin"))
+            @test !isfile(joinpath(checkpoint_dir, "model_iter_26.bin"))
+            @test !isfile(joinpath(checkpoint_dir, "model_iter_27.bin"))
+            @test isfile(joinpath(checkpoint_dir, "model_final.bin"))
+
+            second_output = mktemp() do path, io
+                redirect_stdout(io) do
+                    train_module.main(String[])
+                end
+                flush(io)
+                close(io)
+                read(path, String)
+            end
+            @test occursin("--- Entrenamiento ya completado. ---", second_output)
+        end
     end
 
     @testset "entrypoint scripts load without executing main during tests" begin
