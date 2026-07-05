@@ -8,9 +8,16 @@ Proyecto de investigación para desarrollar un sistema AlphaZero-like para Awale
 
 El proyecto ya tiene una pipeline funcional de entrenamiento/evaluación, pero sigue siendo un repositorio de investigación. La regla principal sigue siendo: **no sacar conclusiones arquitectónicas antes de validar bien la calidad de la señal de entrenamiento**.
 
-### Configuración del Proyecto
+### Configuración del proyecto
 
 El sistema utiliza `config.toml` como única configuración de runtime para entrenamiento, evaluación y juego. Ajustalo directamente según tu corrida.
+
+### Scripts principales
+
+- `train.jl` — continúa o ejecuta entrenamiento y actualiza checkpoints.
+- `baseline_eval.jl` — evalúa un checkpoint contra `RandomAgent` y `HeuristicAgent`.
+- `checkpoint_arena.jl` — compara checkpoints entre sí con `0`, `50` y `200` simulaciones.
+- `play.jl` — corre partidas de exhibición con logs de tablero.
 
 ## Hoja de ruta experimental
 
@@ -44,28 +51,59 @@ El sistema utiliza `config.toml` como única configuración de runtime para entr
 2. Medir cuánto aporta la red sola (`0 sims`) versus red + MCTS (`50/200 sims`).
 3. Recién después decidir si hace falta cambiar arquitectura.
 
-## Cómo ejecutar pruebas (desarrollo)
+## Cómo usar el repositorio
 
-Recomendado: usar el entorno del proyecto de Julia.
+Recomendado: usar siempre el entorno del proyecto de Julia.
 
-- Desde la raíz del repo, instanciar dependencias:
+### 1. Instanciar dependencias
 
-  ```powershell
-  julia --project=. -e "using Pkg; Pkg.instantiate()"
-  ```
+```powershell
+julia --project=. -e "using Pkg; Pkg.instantiate()"
+```
 
-- Ejecutar tests rápidos de desarrollo (incluyen los tests de especificación):
+### 2. Correr la suite de tests
 
-  ```powershell
-  julia --project=. test/runtests.jl
-  ```
+```powershell
+julia --project=. test/runtests.jl
+```
+
+### 3. Entrenar
+
+```powershell
+julia --project=. .\train.jl
+```
+
+El entrenamiento usa `config.toml`, guarda `model_last.bin`, `model_best.bin`, `model_final.bin` y snapshots `model_iter_N.bin` según la política configurada.
+
+### 4. Evaluación rápida contra baselines
+
+```powershell
+julia --project=. .\baseline_eval.jl
+```
+
+Usalo como sanity check. Si el modelo ya domina `RandomAgent` y `HeuristicAgent`, esa evaluación deja de ser discriminante.
+
+### 5. Arena entre checkpoints
+
+```powershell
+julia --project=. .\checkpoint_arena.jl
+```
+
+Usalo para responder si hay progreso real entre checkpoints de la misma pipeline. Hoy es la evaluación más útil para distinguir señal de ruido.
+
+### 6. Partidas de exhibición
+
+```powershell
+julia --project=. .\play.jl
+```
 
 ## Estructura clave
 
 - `spec/`: especificaciones formales y contratos (autoritativo)
 - `src/`: código fuente (módulos: `Awale/State`, `Awale/Env`, `Awale/MCTS`, `Awale/Model`, `Awale/Training`, `Awale/Utils`)
 - `test/`: pruebas unitarias, invariantes y regresión
-- `.github/`: CI y copilot-instructions
+- `checkpoints/`: modelos y estado de entrenamiento
+- `.github/`: CI
 
 ## Flujo de trabajo (gitflow)
 

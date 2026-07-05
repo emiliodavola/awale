@@ -167,7 +167,7 @@ end
         Core.eval(arena_module, :(include(path) = Base.include($(arena_module), path)))
 
         Base.include(train_module, joinpath(@__DIR__, "..", "train.jl"))
-        Base.include(eval_module, joinpath(@__DIR__, "..", "eval.jl"))
+        Base.include(eval_module, joinpath(@__DIR__, "..", "baseline_eval.jl"))
         Base.include(play_module, joinpath(@__DIR__, "..", "play.jl"))
         Base.include(arena_module, joinpath(@__DIR__, "..", "checkpoint_arena.jl"))
 
