@@ -33,15 +33,54 @@ function checkpoint_label(label)
     return label isa Int ? "iter_$(label)" : String(label)
 end
 
+function existing_checkpoint_labels()
+    labels = Any[]
+
+    for entry in readdir(CHECKPOINT_DIR)
+        match_result = match(r"model_iter_(\d+)\.bin", entry)
+        if match_result !== nothing
+            push!(labels, parse(Int, match_result.captures[1]))
+        end
+    end
+
+    for label in ("last", "best", "final")
+        if isfile(checkpoint_path(label))
+            push!(labels, label)
+        end
+    end
+
+    return labels
+end
+
+function available_matchups()
+    existing = Set(existing_checkpoint_labels())
+    matchups = Tuple[]
+
+    for matchup in DEFAULT_MATCHUPS
+        if matchup[1] in existing && matchup[2] in existing
+            push!(matchups, matchup)
+        end
+    end
+
+    numeric_labels = sort([label for label in existing if label isa Int])
+    if isempty(matchups) && length(numeric_labels) >= 2
+        for idx in 1:(length(numeric_labels) - 1)
+            push!(matchups, (numeric_labels[idx], numeric_labels[idx + 1]))
+        end
+        if length(numeric_labels) >= 3
+            push!(matchups, (numeric_labels[end], numeric_labels[1]))
+        end
+    end
+
+    return matchups
+end
+
 function run_duel(label_a, label_b; sims::Int, games::Int)
     path_a = checkpoint_path(label_a)
     path_b = checkpoint_path(label_b)
 
-    if !isfile(path_a)
-        error("Missing checkpoint: $path_a")
-    end
-    if !isfile(path_b)
-        error("Missing checkpoint: $path_b")
+    if !isfile(path_a) || !isfile(path_b)
+        return nothing
     end
 
     model_a = load_model(path_a)
@@ -53,11 +92,24 @@ end
 
 function main()
     println("--- Awale checkpoint arena ---")
+    matchups = available_matchups()
+
+    if isempty(matchups)
+        println("No hay suficientes checkpoints compatibles para correr el arena.")
+        return
+    end
+
+    println("Checkpoints detectados: $(join(checkpoint_label.(existing_checkpoint_labels()), ", "))")
+
     for sims in DEFAULT_SIMS
         println("\nSims per side: $sims")
-        for (label_a, label_b) in DEFAULT_MATCHUPS
+        for (label_a, label_b) in matchups
             results = run_duel(label_a, label_b; sims=sims, games=DEFAULT_GAMES)
-            println("$(checkpoint_label(label_a)) vs $(checkpoint_label(label_b)) => W:$(results.wins) L:$(results.losses) D:$(results.draws) AvgTurns:$(round(results.avg_turns, digits=2))")
+            if results === nothing
+                println("$(checkpoint_label(label_a)) vs $(checkpoint_label(label_b)) => skipped (missing checkpoint)")
+            else
+                println("$(checkpoint_label(label_a)) vs $(checkpoint_label(label_b)) => W:$(results.wins) L:$(results.losses) D:$(results.draws) AvgTurns:$(round(results.avg_turns, digits=2))")
+            end
         end
     end
 end
