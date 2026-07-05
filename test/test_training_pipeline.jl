@@ -53,14 +53,22 @@ end
         @test counts_a == counts_b
     end
 
-    @testset "one-simulation search still honors policy priors" begin
+    @testset "policy-only and one-simulation search honor policy priors" begin
         s = Awale.initial_state()
         rng = MersenneTwister(3)
 
+        action_1_zero, policy_1_zero = Awale.search_with_stats(Awale.MCTSSearch(Prior1Model(), 1.5f0, Dict{UInt64, Tuple{Float32, Int64}}()), s, 0, rng; add_root_noise=false)
+        rng = MersenneTwister(3)
+        action_6_zero, policy_6_zero = Awale.search_with_stats(Awale.MCTSSearch(Prior6Model(), 1.5f0, Dict{UInt64, Tuple{Float32, Int64}}()), s, 0, rng; add_root_noise=false)
+        rng = MersenneTwister(3)
         action_1, counts_1 = Awale.search_with_stats(Awale.MCTSSearch(Prior1Model(), 1.5f0, Dict{UInt64, Tuple{Float32, Int64}}()), s, 1, rng; add_root_noise=false)
         rng = MersenneTwister(3)
         action_6, counts_6 = Awale.search_with_stats(Awale.MCTSSearch(Prior6Model(), 1.5f0, Dict{UInt64, Tuple{Float32, Int64}}()), s, 1, rng; add_root_noise=false)
 
+        @test action_1_zero == 1
+        @test policy_1_zero[1] > 0.99f0
+        @test action_6_zero == 6
+        @test policy_6_zero[6] > 0.99f0
         @test action_1 == 1
         @test counts_1[1] == 1.0f0
         @test action_6 == 6
@@ -135,21 +143,38 @@ end
         @test length(replay_buffer) > 0
     end
 
-    @testset "entrypoint scripts load without executing main during tests" begin
+    @testset "training snapshot policy preserves milestone checkpoints" begin
         train_module = Module(:TrainSmoke)
+        Core.eval(train_module, :(include(path) = Base.include($(train_module), path)))
+        Base.include(train_module, joinpath(@__DIR__, "..", "train.jl"))
+
+        @test train_module.should_save_snapshot(1, 25, [1, 5, 10, 25])
+        @test train_module.should_save_snapshot(5, 25, [1, 5, 10, 25])
+        @test train_module.should_save_snapshot(10, 25, [1, 5, 10, 25])
+        @test train_module.should_save_snapshot(25, 25, [1, 5, 10, 25])
+        @test !train_module.should_save_snapshot(2, 25, [1, 5, 10, 25])
+    end
+
+    @testset "entrypoint scripts load without executing main during tests" begin
+        train_module = Module(:TrainSmoke2)
         eval_module = Module(:EvalSmoke)
         play_module = Module(:PlaySmoke)
+        arena_module = Module(:ArenaSmoke)
 
         Core.eval(train_module, :(include(path) = Base.include($(train_module), path)))
         Core.eval(eval_module, :(include(path) = Base.include($(eval_module), path)))
         Core.eval(play_module, :(include(path) = Base.include($(play_module), path)))
+        Core.eval(arena_module, :(include(path) = Base.include($(arena_module), path)))
 
         Base.include(train_module, joinpath(@__DIR__, "..", "train.jl"))
         Base.include(eval_module, joinpath(@__DIR__, "..", "eval.jl"))
         Base.include(play_module, joinpath(@__DIR__, "..", "play.jl"))
+        Base.include(arena_module, joinpath(@__DIR__, "..", "checkpoint_arena.jl"))
 
         @test isdefined(train_module, :main)
         @test isdefined(eval_module, :main)
         @test isdefined(play_module, :main)
+        @test isdefined(arena_module, :main)
+        @test arena_module.checkpoint_label(5) == "iter_5"
     end
 end

@@ -89,6 +89,15 @@ function search_with_stats(
         root.children[action] = MCTSNode(canonicalize(next_state), root_priors[idx])
     end
 
+    if num_sims <= 0
+        policy = zeros(Float32, 6)
+        for (idx, action) in enumerate(actions)
+            policy[action] = root_priors[idx]
+        end
+        best_action = actions[argmax(root_priors)]
+        return best_action, policy
+    end
+
     for _ in 1:num_sims
         leaf, path = select_and_expand(mcts, root)
         leaf_value = if is_terminal(leaf.state)

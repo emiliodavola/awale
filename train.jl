@@ -25,6 +25,7 @@ BATCH_SIZE = Int(get(training_cfg, "batch_size", 128))
 UPDATES_PER_ITERATION = Int(get(training_cfg, "updates_per_iteration", 64))
 TEMPERATURE_MOVES = Int(get(training_cfg, "temperature_moves", 20))
 CHECKPOINT_EVERY = Int(get(training_cfg, "checkpoint_every", 25))
+MILESTONE_ITERATIONS = sort(unique(Int.(get(training_cfg, "milestone_iterations", Int[]))))
 LAST_CHECKPOINT_PATH = String(get(training_cfg, "last_checkpoint_path", joinpath(CHECKPOINT_DIR, "model_last.bin")))
 BEST_CHECKPOINT_PATH = String(get(training_cfg, "best_checkpoint_path", joinpath(CHECKPOINT_DIR, "model_best.bin")))
 STATE_PATH = String(get(training_cfg, "state_path", joinpath(CHECKPOINT_DIR, "training_state.toml")))
@@ -93,6 +94,9 @@ function maybe_resume_from_legacy_checkpoint!(model_ref, start_iter_ref)
     end
 end
 
+should_save_snapshot(iter::Int, checkpoint_every::Int, milestone_iterations::Vector{Int}) =
+    (checkpoint_every > 0 && iter % checkpoint_every == 0) || (iter in milestone_iterations)
+
 function main(args::Vector{String}=Base.ARGS)
     println("--- Iniciando Entrenamiento y Evaluación de Awale ---")
 
@@ -115,10 +119,6 @@ function main(args::Vector{String}=Base.ARGS)
 
     if "--reset" in args
         println("⚠️ [RESTART] Modo reinicio activado. Ignorando checkpoints.")
-    elseif isfile(CHECKPOINT_PATH)
-        println("¡Modelo final detectado! El entrenamiento ya fue completado.")
-        model[] = load_model(CHECKPOINT_PATH)
-        start_iter[] = NUM_ITERATIONS + 1
     elseif isfile(LAST_CHECKPOINT_PATH) && isfile(STATE_PATH)
         last_iter, saved_best_win_rate = read_training_state(STATE_PATH)
         best_win_rate[] = saved_best_win_rate
@@ -130,8 +130,17 @@ function main(args::Vector{String}=Base.ARGS)
             model[] = load_model(LAST_CHECKPOINT_PATH)
         else
             println("El entrenamiento alcanzó la iteración máxima ($last_iter).")
+            if isfile(CHECKPOINT_PATH)
+                model[] = load_model(CHECKPOINT_PATH)
+            else
+                model[] = load_model(LAST_CHECKPOINT_PATH)
+            end
             start_iter[] = NUM_ITERATIONS + 1
         end
+    elseif isfile(CHECKPOINT_PATH)
+        println("¡Modelo final detectado! El entrenamiento ya fue completado.")
+        model[] = load_model(CHECKPOINT_PATH)
+        start_iter[] = NUM_ITERATIONS + 1
     else
         maybe_resume_from_legacy_checkpoint!(model, start_iter)
     end
@@ -174,7 +183,7 @@ function main(args::Vector{String}=Base.ARGS)
                 println("  ✅ Nuevo mejor modelo guardado en: $BEST_CHECKPOINT_PATH")
             end
 
-            if CHECKPOINT_EVERY > 0 && iter % CHECKPOINT_EVERY == 0
+            if should_save_snapshot(iter, CHECKPOINT_EVERY, MILESTONE_ITERATIONS)
                 snapshot_path = joinpath(CHECKPOINT_DIR, "model_iter_$iter.bin")
                 save_model(model[], snapshot_path)
                 println("  📦 Snapshot guardado en: $snapshot_path")
