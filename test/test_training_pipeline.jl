@@ -176,5 +176,10 @@ end
         @test isdefined(play_module, :main)
         @test isdefined(arena_module, :main)
         @test arena_module.checkpoint_label(5) == "iter_5"
+
+        openings_a = arena_module.generate_opening_suite(seed=123, openings_per_ply=2)
+        openings_b = arena_module.generate_opening_suite(seed=123, openings_per_ply=2)
+        @test length(openings_a) == 8
+        @test [arena_module.Awale.serialize_state(s) for s in openings_a] == [arena_module.Awale.serialize_state(s) for s in openings_b]
     end
 end
