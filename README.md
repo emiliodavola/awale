@@ -4,24 +4,45 @@
 
 Proyecto de investigación para desarrollar un sistema AlphaZero-like para Awale (Oware/Awari) en Julia. Enfoque: especificaciones formales → contratos → pruebas de propiedades → implementación. Este repositorio contiene la especificación completa en `spec/` y el código implementado en `src/`.
 
-## 🚀 Estado Actual (v2.1)
+## 🚀 Estado actual
 
-**Fases 1, 2 y 3 han sido completadas exitosamente.**
-
-- ✅ **Core Logic & Termination:** Implementación de Grand Slam y detección de empates.
-- ✅ **MCTS Architecture:** Integración de la Transposition Table (TT) para optimización de búsqueda.
-- ✅ **Performance Optimization:** Reducción de asignaciones de memoria en los hot-paths.
+El proyecto ya tiene una pipeline funcional de entrenamiento/evaluación, pero sigue siendo un repositorio de investigación. La regla principal sigue siendo: **no sacar conclusiones arquitectónicas antes de validar bien la calidad de la señal de entrenamiento**.
 
 ### Configuración del Proyecto
 
 El sistema utiliza `config.toml` como única configuración de runtime para entrenamiento, evaluación y juego. Ajustalo directamente según tu corrida.
 
+## Hoja de ruta experimental
+
+### Regla central
+
+> **No optimizar la arquitectura de red antes de validar la representación de estado y el pipeline de entrenamiento.**
+
+### Orden de trabajo recomendado
+
+1. **State encoding**
+   - usar una representación estructurada `(C, 12)`
+   - evitar feature engineering excesivo
+2. **Strong MLP baseline**
+   - establecer una baseline fuerte antes de introducir inductive bias más complejo
+3. **Self-play + MCTS scaling**
+   - comparar siempre con el mismo presupuesto de búsqueda y self-play
+4. **Architecture benchmarking**
+   - recién después comparar MLP contra variantes más complejas como ResNet1D
+
+### Métricas que importan
+
+- **Sample efficiency**
+- **Win rate / arena performance**
+- **Policy entropy**
+- **Value stability**
+- **Elo relativo**
+
 ## Siguientes pasos recomendados
 
-1. **Phase 4: Validation & Benchmarking**
-   - Realizar pruebas de integridad de las nuevas reglas de terminación.
-   - Comparar el rendimiento (Win Rate) de un agente con TT vs. Vanilla MCTS.
-   - Ejecutar microbenchmarks para cuantificar el ahorro de memoria.
+1. Seguir con benchmarks entre checkpoints de la pipeline nueva.
+2. Medir cuánto aporta la red sola (`0 sims`) versus red + MCTS (`50/200 sims`).
+3. Recién después decidir si hace falta cambiar arquitectura.
 
 ## Cómo ejecutar pruebas (desarrollo)
 
@@ -43,7 +64,7 @@ Recomendado: usar el entorno del proyecto de Julia.
 
 - `spec/`: especificaciones formales y contratos (autoritativo)
 - `src/`: código fuente (módulos: `Awale/State`, `Awale/Env`, `Awale/MCTS`, `Awale/Model`, `Awale/Training`, `Awale/Utils`)
-- `test/`: pruebas unitarias y de invariantes
+- `test/`: pruebas unitarias, invariantes y regresión
 - `.github/`: CI y copilot-instructions
 
 ## Flujo de trabajo (gitflow)
