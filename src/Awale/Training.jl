@@ -57,12 +57,12 @@ function collect_selfplay_data(
     config::GameConfig=GameConfig(),
     sims_per_move::Int=100,
     temperature_moves::Int=20,
-    rng=Random.default_rng(),
+    rng=Random.default_rng();
+    max_turns::Int=1000,
 )
     state = initial_state(config)
     samples = Tuple{GameState, Vector{Float32}, Float32}[]
     turns_played = 0
-    max_turns = 1000
 
     while !is_terminal(state) && turns_played < max_turns
         _, pi_target = search_with_stats(mcts, state, sims_per_move, rng; add_root_noise=true)
@@ -108,6 +108,7 @@ function run_training_iteration(
     replay_recent_window::Int=4096,
     temperature_moves::Int=20,
     rng=Random.default_rng(),
+    max_turns::Int=1000,
 )
     recent_pct = Int(round(replay_recent_fraction * 100))
     history_pct = 100 - recent_pct
@@ -115,7 +116,7 @@ function run_training_iteration(
     for game_idx in 1:n_games
         print("\r  Self-play: $game_idx/$n_games")
         flush(stdout)
-        game_data = collect_selfplay_data(mcts, GameConfig(), sims, temperature_moves, rng)
+        game_data = collect_selfplay_data(mcts, GameConfig(), sims, temperature_moves, rng; max_turns=max_turns)
         for (state, pi_target, value_target) in game_data
             push_experience!(replay_buffer, Experience(state, pi_target, value_target))
         end
@@ -142,8 +143,8 @@ function run_training_iteration(
     return isempty(losses) ? 0.0f0 : sum(losses) / length(losses)
 end
 
-function play_game(mcts, config=GameConfig(), sims=100, temperature_moves=20, rng=Random.default_rng())
-    return collect_selfplay_data(mcts, config, sims, temperature_moves, rng)
+function play_game(mcts, config=GameConfig(), sims=100, temperature_moves=20, rng=Random.default_rng(); max_turns::Int=1000)
+    return collect_selfplay_data(mcts, config, sims, temperature_moves, rng; max_turns=max_turns)
 end
 
 end # module

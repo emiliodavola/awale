@@ -3,7 +3,7 @@ const ROOT_DIR = @__DIR__
 include(joinpath(ROOT_DIR, "src", "Awale.jl"))
 using .Awale
 using .Awale.Training: run_training_iteration
-using .Awale.Model: save_model, load_model
+using .Awale.Model: save_model, load_model, atomic_write
 using .Awale.Evaluation: HeuristicAgent, RandomAgent, ModelAgent, evaluate_agents, evaluate_agents_on_openings, generate_opening_suite
 using .Awale.MCTS: MCTSSearch
 using .Awale.ReplayBuffers: ReplayBuffer
@@ -47,9 +47,14 @@ USE_RANDOM_ANCHOR = Bool(get(selection_cfg, "use_random_anchor", true))
 USE_HEURISTIC_ANCHOR = Bool(get(selection_cfg, "use_heuristic_anchor", false))
 ANCHOR_MIN_DECIDED_WIN_RATE = Float64(get(selection_cfg, "anchor_min_decided_win_rate", 50.0))
 C_PUCT = Float32(mcts_cfg["c_puct"])
+const INITIAL_MODEL_SEED = Int(training_cfg["initial_model_seed"])
+const BOOTSTRAP_RNG_SEED = Int(training_cfg["bootstrap_rng_seed"])
+const MAX_TURNS = Int(training_cfg["max_turns"])
+const TRAINING_STATE_RESUME_CONTRACT = "weights-only"
 
 function write_training_state(path::String, last_iter::Int, best_selection_score::Float64)
-    open(path, "w") do io
+    atomic_write(path) do io
+        println(io, "resume_contract = \"$(TRAINING_STATE_RESUME_CONTRACT)\"")
         println(io, "last_iter = $last_iter")
         println(io, "best_selection_score = $best_selection_score")
     end
@@ -57,13 +62,14 @@ end
 
 function read_training_state(path::String)
     if !isfile(path)
-        return 0, -1.0
+        return 0, -1.0, TRAINING_STATE_RESUME_CONTRACT
     end
 
     state = TOML.parsefile(path)
     last_iter = Int(get(state, "last_iter", 0))
     best_selection_score = Float64(get(state, "best_selection_score", get(state, "best_win_rate", -1.0)))
-    return last_iter, best_selection_score
+    resume_contract = String(get(state, "resume_contract", TRAINING_STATE_RESUME_CONTRACT))
+    return last_iter, best_selection_score, resume_contract
 end
 
 function decided_win_rate(results)::Float64
@@ -98,6 +104,12 @@ function build_selection_openings()
 end
 
 selection_rng(offset::Int) = Random.MersenneTwister(BEST_SELECTION_SEED + offset)
+
+function create_initial_model()
+    println("Inicializando modelo base con seed fija: $INITIAL_MODEL_SEED")
+    Random.seed!(INITIAL_MODEL_SEED)
+    return Awale.create_model(MODEL_CONFIG_PATH)
+end
 
 function selection_gate_status(current_best_rate, anchor_reports)
     passes_best = current_best_rate === nothing || current_best_rate >= BEST_PROMOTION_THRESHOLD
@@ -222,21 +234,23 @@ function main(args::Vector{String}=Base.ARGS)
 
     save_run_config(log_dir)
 
-    rng = Random.MersenneTwister(42)
+    rng = Random.MersenneTwister(BOOTSTRAP_RNG_SEED)
+println("Bootstrap RNG seed: $BOOTSTRAP_RNG_SEED | max_turns: $MAX_TURNS")
 
     start_iter = Ref(1)
     best_selection_score = Ref(-1.0)
-    model = Ref(Awale.create_model(MODEL_CONFIG_PATH))
+    model = Ref(create_initial_model())
 
     if "--reset" in args
         println("⚠️ [RESTART] Modo reinicio activado. Ignorando checkpoints.")
     elseif isfile(LAST_CHECKPOINT_PATH) && isfile(STATE_PATH)
-        last_iter, saved_best_selection_score = read_training_state(STATE_PATH)
+        last_iter, saved_best_selection_score, resume_contract = read_training_state(STATE_PATH)
         best_selection_score[] = saved_best_selection_score
 
         if last_iter < NUM_ITERATIONS
             start_iter[] = last_iter + 1
             println("¡Checkpoint detectado! Reanudando desde la iteración $last_iter...")
+            println("Contrato de reanudación: $resume_contract (solo pesos; optimizer/replay/RNG no se persisten).")
             println("Cargando modelo: $LAST_CHECKPOINT_PATH")
             model[] = load_model(LAST_CHECKPOINT_PATH)
         else
@@ -279,6 +293,7 @@ function main(args::Vector{String}=Base.ARGS)
                 replay_recent_window=REPLAY_RECENT_WINDOW,
                 temperature_moves=TEMPERATURE_MOVES,
                 rng=rng,
+                max_turns=MAX_TURNS,
             )
             println("  Loss promedio: $(round(loss, digits=4))")
             println("  Replay buffer: $(length(replay_buffer)) muestras")

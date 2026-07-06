@@ -19,6 +19,7 @@ function Awale.Model.predict(::Prior6Model, ::Awale.GameState)
     return Float32[-10, -10, -10, -10, -10, 10], 0.0f0
 end
 
+
 @testset "training pipeline" begin
     @testset "value target backfill uses pre-terminal perspective" begin
         samples = [
@@ -35,6 +36,35 @@ end
     @testset "policy head keeps unconstrained logits" begin
         model = Awale.create_model()
         @test model.policy.layers[end].σ === identity
+    end
+
+    @testset "initial model creation is deterministic for a fixed seed" begin
+        train_module = Module(:TrainInitSmoke)
+        Core.eval(train_module, :(include(path) = Base.include($(train_module), path)))
+        Base.include(train_module, joinpath(@__DIR__, "..", "train.jl"))
+
+        seed = Int(train_module.training_cfg["initial_model_seed"])
+        bootstrap_seed = Int(train_module.training_cfg["bootstrap_rng_seed"])
+        @test train_module.INITIAL_MODEL_SEED == seed
+        @test train_module.BOOTSTRAP_RNG_SEED == bootstrap_seed
+
+        log_a = Pipe()
+        model_a = redirect_stdout(log_a) do
+            train_module.create_initial_model()
+        end
+        close(log_a.in)
+        output_a = read(log_a, String)
+
+        log_b = Pipe()
+        model_b = redirect_stdout(log_b) do
+            train_module.create_initial_model()
+        end
+        close(log_b.in)
+        output_b = read(log_b, String)
+
+        @test occursin("seed fija: $seed", output_a)
+        @test occursin("seed fija: $seed", output_b)
+        @test train_module.Awale.predict(model_a, train_module.Awale.initial_state()) == train_module.Awale.predict(model_b, train_module.Awale.initial_state())
     end
 
     @testset "search clears stale transposition state and supports deterministic eval mode" begin
@@ -227,10 +257,43 @@ end
             write(io, "last_iter = 7\nbest_win_rate = 61.5\n")
             flush(io)
             close(io)
-            last_iter, best_selection_score = train_module.read_training_state(path)
+            last_iter, best_selection_score, resume_contract = train_module.read_training_state(path)
             @test last_iter == 7
             @test best_selection_score == 61.5
+            @test resume_contract == "weights-only"
         end
+
+        mktempdir() do tmpdir
+            state_path = joinpath(tmpdir, "training_state.toml")
+            train_module.write_training_state(state_path, 7, 61.5)
+            @test read(state_path, String) == "resume_contract = \"weights-only\"\nlast_iter = 7\nbest_selection_score = 61.5\n"
+
+            roundtrip_last_iter, roundtrip_best_selection_score, roundtrip_resume_contract = train_module.read_training_state(state_path)
+            @test roundtrip_last_iter == 7
+            @test roundtrip_best_selection_score == 61.5
+            @test roundtrip_resume_contract == "weights-only"
+
+            preserved_path = joinpath(tmpdir, "state-preserved.toml")
+                write(preserved_path, "last_iter = 1\n")
+                before_entries = sort(readdir(tmpdir))
+                @test_throws ErrorException train_module.atomic_write(preserved_path) do io
+                    write(io, "last_iter = 2\n")
+                    error("state failure")
+                end
+                @test read(preserved_path, String) == "last_iter = 1\n"
+                @test sort(readdir(tmpdir)) == before_entries
+            end
+
+            mktempdir() do tmpdir
+                model_path = joinpath(tmpdir, "model.bin")
+                model = train_module.Awale.create_model()
+                train_module.save_model(model, model_path)
+                loaded_model = train_module.Awale.Model.load_model(model_path)
+                @test typeof(loaded_model) === typeof(model)
+                @test train_module.Awale.predict(loaded_model, train_module.Awale.initial_state()) == train_module.Awale.predict(model, train_module.Awale.initial_state())
+                @test readdir(tmpdir) == ["model.bin"]
+            end
+
 
         mktempdir() do tmpdir
             best_path = joinpath(tmpdir, "model_best.bin")
@@ -323,6 +386,7 @@ end
             end
 
             @test occursin("Reanudando desde la iteración 24", first_output)
+            @test occursin("Contrato de reanudación: weights-only", first_output)
             @test occursin("Best-selection target: 1 sims, 2 games, 1 openings, threshold", first_output)
             @test isfile(joinpath(checkpoint_dir, "model_iter_25.bin"))
             @test !isfile(joinpath(checkpoint_dir, "model_iter_26.bin"))

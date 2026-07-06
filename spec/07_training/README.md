@@ -37,7 +37,7 @@ This spec describes the **current** training behavior, not an idealized future c
 | `model_best.bin` | best model by win rate vs `RandomAgent` |
 | `model_final.bin` | terminal artifact for the configured run |
 | `model_iter_N.bin` | numbered milestone snapshot |
-| `training_state.toml` | lightweight resume state: `last_iter`, `best_win_rate` |
+| `training_state.toml` | lightweight resume state: `resume_contract`, `last_iter`, `best_selection_score` (`best_win_rate` legacy fallback) |
 
 ### Numbered snapshot rule
 
@@ -51,12 +51,28 @@ The final run state is represented by `model_final.bin`, not by forcing a number
 ## Resume semantics
 
 - Preferred resume path: `model_last.bin` + `training_state.toml`.
+- `training_state.toml` records `resume_contract = "weights-only"` so the current contract is explicit.
+- Resume is intentionally weights-only: the optimizer is recreated, the replay buffer starts fresh, and RNG state is not persisted.
+- Legacy files that only contain `last_iter` and `best_win_rate` still load correctly.
 - Legacy fallback: highest detected `model_iter_N.bin` if the lightweight state file is absent.
-- Current implementation recreates the optimizer on resume.
+
+## Runtime determinism knobs
+
+- `training.initial_model_seed` controls fresh model initialization.
+- `training.bootstrap_rng_seed` controls the main training RNG bootstrap.
+- `training.max_turns` is the shared turn cap used by self-play, evaluation, arena, and interactive play paths.
+
+## Determinism boundary
+
+- Fresh training runs initialize the model in `train.jl` from `training.initial_model_seed`, so the starting weights are reproducible for any fixed configured seed.
+- Training iterations, replay sampling, selection, baseline evaluation, and checkpoint arena runs already use explicit RNGs.
+- This boundary does **not** include resume continuity: the optimizer, replay buffer, and RNG state are still recreated on resume.
 
 ## Important limitation
 
-The current repo does **not** persist full optimizer state, RNG state, commit hash, or exact deterministic continuation metadata. That remains future work.
+The repo still does **not** persist optimizer state, replay-buffer state, RNG state, commit hash, or exact deterministic continuation metadata. That is a conscious limit of the current checkpoint design.
+
+Checkpoint `.bin` files are also treated as **trusted-local-only** artifacts: they are produced by this repo and loaded from the local workspace. The current implementation uses Julia `Serialization` for that internal workflow.
 
 ## Testing checklist
 

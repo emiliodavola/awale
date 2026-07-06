@@ -6,17 +6,19 @@ using .Awale.Model: create_model, load_model
 using TOML
 
 config = TOML.parsefile(joinpath(@__DIR__, "config.toml"))
+training_cfg = config["training"]
 eval_cfg = config["evaluation"]
 mcts_cfg = config["mcts"]
 
 EVAL_GAMES = Int(eval_cfg["eval_games"])
 SIMS_PER_EVAL = Int(eval_cfg["sims_per_eval"])
 CHECKPOINT_PATH = String(eval_cfg["checkpoint_path"])
+MAX_TURNS = Int(training_cfg["max_turns"])
 C_PUCT = Float32(mcts_cfg["c_puct"])
 
-function run_eval(name, agent_under_test, baseline_agent, n_games=20, sims=40)
+function run_eval(name, agent_under_test, baseline_agent, n_games=20, sims=40, max_turns::Int=MAX_TURNS)
     println("Evaluando $name vs $(typeof(baseline_agent)) sobre $n_games juegos...")
-    results = evaluate_agents(agent_under_test, baseline_agent, n_games)
+    results = evaluate_agents(agent_under_test, baseline_agent, n_games; max_turns=max_turns)
 
     win_rate = (results.wins / n_games) * 100
     loss_rate = (results.losses / n_games) * 100

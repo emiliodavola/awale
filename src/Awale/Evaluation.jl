@@ -54,11 +54,10 @@ function select_action(agent::ModelAgent, s::GameState, rng=Random.default_rng()
     return search(agent.mcts, s, agent.sims, rng; add_root_noise=false)
 end
 
-function play_match_from_state(initial_state::GameState, agent_p1, agent_p2, rng=Random.default_rng())
+function play_match_from_state(initial_state::GameState, agent_p1, agent_p2, rng=Random.default_rng(); max_turns::Int=1000)
     state = initial_state
     turn = 1
     turns_played = 0
-    max_turns = 1000
 
     while !is_terminal(state) && turns_played < max_turns
         current_agent = turn == 1 ? agent_p1 : agent_p2
@@ -71,8 +70,8 @@ function play_match_from_state(initial_state::GameState, agent_p1, agent_p2, rng
     return result_from_terminal_state(state), turns_played
 end
 
-function play_match(agent_p1, agent_p2, config::GameConfig=GameConfig(), rng=Random.default_rng())
-    return play_match_from_state(initial_state(config), agent_p1, agent_p2, rng)
+function play_match(agent_p1, agent_p2, config::GameConfig=GameConfig(), rng=Random.default_rng(); max_turns::Int=1000)
+    return play_match_from_state(initial_state(config), agent_p1, agent_p2, rng; max_turns=max_turns)
 end
 
 function generate_opening_suite(; plies::Vector{Int}, openings_per_ply::Int, seed::Int, config::GameConfig=GameConfig())
@@ -96,7 +95,7 @@ function generate_opening_suite(; plies::Vector{Int}, openings_per_ply::Int, see
     return openings
 end
 
-function evaluate_agents_on_openings(agent1, agent2, openings, n_games::Int, rng=Random.default_rng())
+function evaluate_agents_on_openings(agent1, agent2, openings, n_games::Int, rng=Random.default_rng(); max_turns::Int=1000)
     wins = 0
     losses = 0
     draws = 0
@@ -105,9 +104,9 @@ function evaluate_agents_on_openings(agent1, agent2, openings, n_games::Int, rng
     for game_idx in 1:n_games
         opening = openings[mod1(game_idx, length(openings))]
         if game_idx % 2 == 0
-            result, turns = play_match_from_state(opening, agent1, agent2, rng)
+            result, turns = play_match_from_state(opening, agent1, agent2, rng; max_turns=max_turns)
         else
-            result, turns = play_match_from_state(opening, agent2, agent1, rng)
+            result, turns = play_match_from_state(opening, agent2, agent1, rng; max_turns=max_turns)
             result = -result
         end
 
@@ -124,7 +123,7 @@ function evaluate_agents_on_openings(agent1, agent2, openings, n_games::Int, rng
     return (wins=wins, losses=losses, draws=draws, avg_turns=total_turns / n_games)
 end
 
-function evaluate_agents(agent1, agent2, n_games::Int, config::GameConfig=GameConfig(), rng=Random.default_rng())
+function evaluate_agents(agent1, agent2, n_games::Int, config::GameConfig=GameConfig(), rng=Random.default_rng(); max_turns::Int=1000)
     wins = 0
     losses = 0
     draws = 0
@@ -132,9 +131,9 @@ function evaluate_agents(agent1, agent2, n_games::Int, config::GameConfig=GameCo
 
     for game_idx in 1:n_games
         if game_idx % 2 == 0
-            result, turns = play_match(agent1, agent2, config, rng)
+            result, turns = play_match(agent1, agent2, config, rng; max_turns=max_turns)
         else
-            result, turns = play_match(agent2, agent1, config, rng)
+            result, turns = play_match(agent2, agent1, config, rng; max_turns=max_turns)
             result = -result
         end
 

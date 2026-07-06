@@ -13,6 +13,7 @@ selection_cfg = get(config, "selection", Dict{String, Any}())
 mcts_cfg = config["mcts"]
 
 CHECKPOINT_DIR = String(training_cfg["checkpoint_dir"])
+MAX_TURNS = Int(training_cfg["max_turns"])
 C_PUCT = Float32(mcts_cfg["c_puct"])
 DEFAULT_GAMES = Int(get(selection_cfg, "promotion_games", 200))
 DEFAULT_SIMS = [0, 50, 200]
@@ -184,7 +185,7 @@ function resolve_model(label, path::AbstractString, model_cache)
     return isfile(path) ? load_model(path) : nothing
 end
 
-function run_duel(label_a, label_b; sims::Int, games::Int, openings=generate_opening_suite(plies=DEFAULT_OPENING_PLIES, openings_per_ply=OPENINGS_PER_PLY, seed=OPENING_SEED), model_cache=nothing)
+function run_duel(label_a, label_b; sims::Int, games::Int, openings=generate_opening_suite(plies=DEFAULT_OPENING_PLIES, openings_per_ply=OPENINGS_PER_PLY, seed=OPENING_SEED), model_cache=nothing, max_turns::Int=MAX_TURNS)
     path_a = checkpoint_path(label_a)
     path_b = checkpoint_path(label_b)
 
@@ -197,7 +198,7 @@ function run_duel(label_a, label_b; sims::Int, games::Int, openings=generate_ope
     agent_a = ModelAgent(MCTSSearch(model_a, C_PUCT, Dict{UInt64, Tuple{Float32, Int64}}()), sims)
     agent_b = ModelAgent(MCTSSearch(model_b, C_PUCT, Dict{UInt64, Tuple{Float32, Int64}}()), sims)
     duel_rng = Random.MersenneTwister(OPENING_SEED + 1000 * sims + 31 * stable_label_seed(label_a) + stable_label_seed(label_b))
-    return evaluate_agents_on_openings(agent_a, agent_b, openings, games, duel_rng)
+    return evaluate_agents_on_openings(agent_a, agent_b, openings, games, duel_rng; max_turns=max_turns)
 end
 
 function main(; post_freeze_callback=nothing)
