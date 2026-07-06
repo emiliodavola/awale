@@ -10,7 +10,7 @@ El proyecto ya tiene una pipeline funcional de entrenamiento/evaluación, pero s
 
 ### Configuración del proyecto
 
-El sistema usa `config.toml` como configuración local de runtime para entrenamiento, evaluación y juego. La plantilla versionada vive en `config.toml.example`; copiála a `config.toml` y editala localmente. La arquitectura del modelo vive en `src/Awale/config.toml` y se referencia desde la configuración runtime mediante `model_config_path`.
+El sistema usa `config.toml` como configuración local de runtime para entrenamiento, evaluación y juego. La plantilla versionada vive en `config.toml.example`; copiála a `config.toml` y editala localmente. Las semillas de inicialización/bootstrapping del entrenamiento y límites compartidos como `training.max_turns` se controlan desde ahí, así que la reproducibilidad y los topes de runtime no quedan hardcodeados. La arquitectura del modelo vive en `src/Awale/config.toml` de forma local/no versionada; la plantilla versionada vive en `src/Awale/config.toml.example`.
 
 ### Scripts principales
 
@@ -81,6 +81,8 @@ julia --project=. .\train.jl
 ```
 
 El entrenamiento usa tu `config.toml` local, guarda `model_last.bin`, `model_best.bin`, `model_final.bin` y snapshots `model_iter_N.bin` solo en hitos automáticos: iteración 1, potencias de 2 y múltiplos de `checkpoint_every`.
+
+Los checkpoints `.bin` se tratan como artefactos locales de confianza: el flujo actual usa `Serialization` para checkpoints generados por el propio repo, no como un formato para cargar archivos arbitrarios de terceros.
 
 ### 4. Evaluación rápida contra baselines
 

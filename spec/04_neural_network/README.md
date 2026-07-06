@@ -28,7 +28,7 @@ This spec documents the **current** model/encoding contract implemented in `src/
 
 | Area | Current contract |
 |---|---|
-| Architecture config | Loaded from `src/Awale/config.toml` |
+| Architecture config | Loaded from local `src/Awale/config.toml` (template: `src/Awale/config.toml.example`) |
 | Forward path | Shared trunk + policy/value heads in Flux |
 | Policy activation | Final policy layer is unconstrained (`identity`) logits |
 | Save/load | Uses Julia `Serialization.serialize` / `deserialize` |

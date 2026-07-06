@@ -53,13 +53,53 @@ function predict_batch(model::AwaleModel, states::Vector{GameState})
     return predict_raw(model, X)
 end
 
+function atomic_write(write_fn::Function, path::AbstractString)
+    parent = dirname(path)
+    isdir(parent) || mkpath(parent)
+    temp_path, io = mktemp(parent)
+    success = false
+    try
+        write_fn(io)
+        flush(io)
+        close(io)
+        mv(temp_path, path; force=true)
+        success = true
+    catch
+        try
+            isopen(io) && close(io)
+        finally
+            rethrow()
+        end
+    finally
+        if !success && isfile(temp_path)
+            rm(temp_path; force=true)
+        end
+    end
+    return path
+end
+
+"""
+    save_model(model, path)
+
+Persist a checkpoint to `path` using Julia `Serialization`.
+
+Checkpoint `.bin` files are a trusted-local artifact in this repo: they are expected to be
+created by this project and loaded from the local workspace only.
+"""
 function save_model(model::AwaleModel, path::AbstractString)
-    open(path, "w") do io
+    atomic_write(path) do io
         Serialization.serialize(io, model)
     end
     return path
 end
 
+"""
+    load_model(path)
+
+Load a checkpoint from `path` using Julia `Serialization`.
+
+This is intentionally a trusted-local-only path for project-generated `.bin` files.
+"""
 function load_model(path::AbstractString)::AwaleModel
     open(path, "r") do io
         return Serialization.deserialize(io)

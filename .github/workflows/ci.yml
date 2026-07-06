@@ -27,6 +27,11 @@ jobs:
       - name: Cache Julia artifacts
         uses: julia-actions/cache@v2
 
+      - name: Prepare runtime configs
+        run: |
+          cp config.toml.example config.toml
+          cp src/Awale/config.toml.example src/Awale/config.toml
+
       - name: Instantiate
         run: julia --project=. -e "using Pkg; Pkg.instantiate()"
 

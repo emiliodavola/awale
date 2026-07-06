@@ -11,12 +11,14 @@ using TOML
 using Dates
 
 config = TOML.parsefile(joinpath(@__DIR__, "config.toml"))
+training_cfg = config["training"]
 eval_cfg = config["evaluation"]
 mcts_cfg = config["mcts"]
 
 EVAL_GAMES = Int(eval_cfg["eval_games"])
 SIMS_PER_EVAL = Int(eval_cfg["sims_per_eval"])
 CHECKPOINT_PATH = String(eval_cfg["checkpoint_path"])
+MAX_TURNS = Int(training_cfg["max_turns"])
 C_PUCT = Float32(mcts_cfg["c_puct"])
 
 function print_board(s::GameState)
@@ -27,11 +29,10 @@ function print_board(s::GameState)
     println(repeat("-", 30))
 end
 
-function play_match_with_logs(agent_p1, agent_p2, config::GameConfig=GameConfig())
+function play_match_with_logs(agent_p1, agent_p2, config::GameConfig=GameConfig(), max_turns::Int=MAX_TURNS)
     s = initial_state(config)
     turn = 1
     turns_played = 0
-    max_turns = 1000
 
     println("--- Comienzo del Partido ---")
     print_board(s)
