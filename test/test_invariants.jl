@@ -1,7 +1,7 @@
 using Test
-using Awale
-using Awale.State: initial_state, GameConfig
-using Awale.Env: transition, legal_actions
+using .Awale
+using .Awale.State: initial_state, GameConfig
+using .Awale.Env: transition, legal_actions
 
 @testset "Game Invariants" begin
     config = GameConfig()

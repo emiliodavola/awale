@@ -1,0 +1,23 @@
+[training]
+num_iterations = 27
+games_per_iteration = 100
+sims_per_move = 200
+learning_rate = 0.0005
+checkpoint_dir = "checkpoints"
+replay_buffer_capacity = 20000
+batch_size = 128
+updates_per_iteration = 32
+temperature_moves = 20
+checkpoint_every = 25
+last_checkpoint_path = "checkpoints/model_last.bin"
+best_checkpoint_path = "checkpoints/model_best.bin"
+state_path = "checkpoints/training_state.toml"
+model_config_path = "src/Awale/config.toml"
+
+[evaluation]
+eval_games = 100
+sims_per_eval = 200
+checkpoint_path = "checkpoints/model_final.bin"
+
+[mcts]
+c_puct = 2.5

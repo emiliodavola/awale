@@ -13,4 +13,5 @@ using .Awale
     s2 = Awale.deserialize_state(bytes)
     @test Awale.serialize_state(s2) == bytes
     @test Awale.validate_invariants(s2)
+    @test !Awale.is_terminal(s2)
 end

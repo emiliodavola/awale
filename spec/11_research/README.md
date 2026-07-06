@@ -1,20 +1,31 @@
-11_research: Decision log, experiments, and open questions
+# 11_research: Lightweight research notes and decision trail
 
-Purpose
-- Capture research notes, design trade-offs, experiment results, and decisions so future contributors understand rationale.
+This repository currently keeps research history in a lightweight form.
 
-Contents (files to maintain)
-- decision_log.md  -- every architectural or interface decision with timestamp and author
-- experiments.md   -- experiment configs and results (reproducible via checkpoint metadata)
-- known_issues.md  -- current limitations and TODOs
-- literature.md    -- references to Awale/Oware rule variants, AlphaZero, and RL search papers
+## Current sources of truth
 
-Reproducibility
-- Each experiment must record: code commit hash, Project.toml, Julia version, hardware, RNG seeds, and dataset/checkpoint IDs
+- `README.md` for the current experimental workflow
+- `config.toml` for runtime experiment settings
+- commit history for concrete implementation decisions
+- arena outputs and checkpoint comparisons for training signal interpretation
 
-Initial open questions
-- Best canonicalization: rotation-only vs mirroring? Trade-offs documented
-- Preferred property-based testing library for Julia (implement small in-repo generator as fallback)
+## Recommended notes to maintain when needed
 
-Test artifacts
-- Attach canonical test positions and their expected outcomes here for reference in regression tests
+These files are recommended, but not mandatory unless the workflow starts depending on them:
+- `decision_log.md`
+- `experiments.md`
+- `known_issues.md`
+- `literature.md`
+
+## Minimum expectation
+
+When a change affects training methodology, evaluation methodology, or model/data contracts, update:
+1. the relevant spec file,
+2. the README usage notes if the workflow changes,
+3. tests that prove the behavior.
+
+## Open research questions currently relevant
+
+- How stable is the checkpoint arena signal as training scales beyond the first milestones?
+- When should the repo move from baseline-vs-random selection to stronger selection criteria?
+- At what point does the current MLP become the bottleneck rather than data/search budget?
