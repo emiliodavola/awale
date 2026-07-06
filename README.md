@@ -2,7 +2,7 @@
 
 ## Resumen breve
 
-Proyecto de investigación para desarrollar un sistema AlphaZero-like para Awale (Oware/Awari) en Julia. Enfoque: especificaciones formales → contratos → pruebas de propiedades → implementación. Este repositorio contiene la especificación completa en `spec/` y el código implementado en `src/`.
+Proyecto de investigación para desarrollar un sistema AlphaZero-like para Awale (Oware/Awari) en Julia. Enfoque: especificaciones formales → contratos → pruebas de propiedades → implementación. `spec/` documenta los contratos actuales del sistema y `src/` contiene la implementación.
 
 ## 🚀 Estado actual
 
@@ -10,7 +10,7 @@ El proyecto ya tiene una pipeline funcional de entrenamiento/evaluación, pero s
 
 ### Configuración del proyecto
 
-El sistema utiliza `config.toml` como única configuración de runtime para entrenamiento, evaluación y juego. Ajustalo directamente según tu corrida.
+El sistema utiliza `config.toml` como configuración principal de runtime para entrenamiento, evaluación y juego. La arquitectura del modelo vive en `src/Awale/config.toml` y se referencia desde `config.toml` mediante `model_config_path`.
 
 ### Scripts principales
 
@@ -65,6 +65,12 @@ julia --project=. -e "using Pkg; Pkg.instantiate()"
 ### 2. Correr la suite de tests
 
 ```powershell
+julia --project=. -e "using Pkg; Pkg.test()"
+```
+
+Alternativa local directa:
+
+```powershell
 julia --project=. test/runtests.jl
 ```
 
@@ -74,7 +80,7 @@ julia --project=. test/runtests.jl
 julia --project=. .\train.jl
 ```
 
-El entrenamiento usa `config.toml`, guarda `model_last.bin`, `model_best.bin`, `model_final.bin` y snapshots `model_iter_N.bin` según la política configurada.
+El entrenamiento usa `config.toml`, guarda `model_last.bin`, `model_best.bin`, `model_final.bin` y snapshots `model_iter_N.bin` solo en hitos automáticos: iteración 1, potencias de 2 y múltiplos de `checkpoint_every`.
 
 ### 4. Evaluación rápida contra baselines
 
@@ -90,7 +96,7 @@ Usalo como sanity check. Si el modelo ya domina `RandomAgent` y `HeuristicAgent`
 julia --project=. .\checkpoint_arena.jl
 ```
 
-Usalo para responder si hay progreso real entre checkpoints de la misma pipeline. Hoy es la evaluación más útil para distinguir señal de ruido.
+Usalo para responder si hay progreso real entre checkpoints de la misma pipeline. Hoy es la evaluación más útil para distinguir señal de ruido porque compara checkpoints consecutivos sobre una opening suite reproducible.
 
 ### 6. Partidas de exhibición
 
@@ -108,7 +114,7 @@ Usalo solo para medir hot paths y comparar impacto de cambios de performance.
 
 ## Estructura clave
 
-- `spec/`: especificaciones formales y contratos (autoritativo)
+- `spec/`: contratos actuales del sistema y notas de diseño
 - `src/`: código fuente (módulos: `Awale/State`, `Awale/Env`, `Awale/MCTS`, `Awale/Model`, `Awale/Training`, `Awale/Utils`)
 - `test/`: pruebas unitarias, invariantes y regresión
 - `checkpoints/`: modelos y estado de entrenamiento

@@ -74,7 +74,7 @@ end
 **Crucial Invariants for Development:**
 
 - **No Method Overwriting**: Never define the same function signature twice within a module (e.g., two `predict(...)` functions). This will cause critical failures during Julia's module precompilation.
-- **Encoding Consistency**: Always use the canonical `encode_state()` function to prepare inputs for the neural network. Manual normalization or bypassing this function leads to `DimensionMismatch` errors because the model architecture expects a fixed input size (14 features: 12 pits + 2 captured).
+- **Encoding Consistency**: Always use the canonical `encode_state()` function to prepare inputs for the neural network. Manual normalization or bypassing this function leads to `DimensionMismatch` errors because the current model path expects a flattened `4 x 12` encoding (48 Float32 features).
 - Syntax Clarity: Do not apply Python syntax patterns to Julia. For example, avoid using the `*` operator for string repetition (use repeat() instead).
 
 To ensure seamless integration with Zygote and Optimisers, follow these rules:

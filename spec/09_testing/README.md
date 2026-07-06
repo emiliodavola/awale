@@ -1,32 +1,46 @@
-09_testing: Property-based tests, unit tests, and test harness
+# 09_testing: Current test strategy
 
-Testing strategy
-- Use specification-first approach: write property tests from specs in earlier directories before implementing logic.
-- Test layers:
-  1. Unit tests for pure functions (canonicalize, legal_actions, serialization)
-  2. Property-based tests for invariants (seed conservation, non-negativity, idempotence)
-  3. Integration tests for transition semantics across variants
-  4. Determinism tests (fixed RNG seeds produce identical outputs)
+This spec documents the current test layout and the gaps that still exist.
 
-Suggested tooling (Julia)
-- Use Test.jl for unit tests
-- For property-based testing use a QuickCheck-style library (e.g., QuickCheck.jl or PropertyTests.jl). If not available, implement small in-repo property test utilities with deterministic RNG.
+## Quick path
 
-Critical properties to test (executable forms)
-- For many randomized/generated states s and legal action a:
-  - seed conservation: sum(transition(s,a).board) + captured == 48
-  - no negative pits
-  - transition is pure: original s unchanged
-  - serialization roundtrip equality
-  - canonicalize idempotence
-  - legal_actions only include pits with >0 seeds and respects starvation/forced-feeding rules
+1. Run `julia --project=. -e 'using Pkg; Pkg.test()'` for the package-style test path used by CI.
+2. Use `julia --project=. test/runtests.jl` for local direct execution.
+3. Keep new behavior covered in the same commit as the code change.
 
-Determinism tests
-- For deterministic network outputs stubbed to fixed logits and value, MCTS with fixed RNG produces identical visit distributions
+## Current test layers
 
-Test data and fixtures
-- Provide textual position fixtures in tests/fixtures/ for corner cases: starvation, grand-slam, immediate captures, long endgames, repetition scenarios
+| Layer | Current coverage |
+|---|---|
+| State/model | serialization, canonicalization, encoding, model-head expectations |
+| Environment | legal actions, transitions, reward/terminal semantics |
+| Invariants | seed conservation across repeated random transitions |
+| Variants | forced-feeding and starvation-rule filtering |
+| Search/training | PUCT perspective, deterministic eval mode, replay/training iteration, checkpoint policy, entrypoint loading |
 
-CI
-- Ensure test suite runs on minimal Julia version pinned in Project.toml
-- Run fast unit/property tests on PRs; run longer integration tests on release branch or nightly runs
+## Current CI contract
+
+- CI runs `Pkg.test()`.
+- The package test path must not depend on the current working directory.
+- Top-level scripts and model config resolution must therefore be repo-relative.
+
+## Current gaps
+
+- No dedicated `test/fixtures/` directory yet.
+- No full optimizer/RNG continuation test for checkpoints.
+- No canonical-position regression suite yet.
+- Variant coverage is present but still small.
+
+## Determinism expectations
+
+- Search determinism tests should use fixed RNG seeds.
+- Invariant/property-style tests should prefer explicit seeds when randomness is used.
+- Behavior-level tests are preferred over helper-only assertions when validating user-visible scripts.
+
+## Testing checklist
+
+- [ ] `Pkg.test()` passes
+- [ ] `test/runtests.jl` passes
+- [ ] invariants remain enforced
+- [ ] rule variants stay covered in the active suite
+- [ ] top-level training/evaluation scripts load correctly under tests

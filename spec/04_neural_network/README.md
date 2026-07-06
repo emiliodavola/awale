@@ -1,38 +1,53 @@
-04_neural_network: Network design, inputs, outputs, and training contract
+# 04_neural_network: Network and encoding contract
 
-Design goals
-- Small deterministic MLP-style policy+value network using Flux.jl
-- Deterministic forward pass for a given input and RNG state (for dropout: avoid or disable in training/eval separation)
-- Shared network for both players; inputs are canonicalized current-player views
+This spec documents the **current** model/encoding contract implemented in `src/Awale/State.jl` and `src/Awale/Model.jl`.
 
-Input encoding
-- Input vector x ∈ R^{N} where N = 12 (board) + 2 (captured normalized) + optional feature flags
-- Normalize board: divide by 48 or use fixed scaling to keep inputs in a numerically stable range
-- Use Float32 tensors. For batching, use Matrix{Float32} with features on columns.
+## Quick path
 
-Output
-- Policy logits y_policy ∈ R^{6} corresponding to local-side actions 0..5 (unused for illegal actions but network returns logits for all)
-- Value scalar y_value ∈ [-1,1]
+1. Encode states with `encode_state(s)`.
+2. Flatten the `4 x 12` tensor for the current MLP.
+3. Interpret the 6 policy logits in local action order `1..6`.
 
-Suggested architecture (small)
-- Input layer → Dense(128, relu) → Dense(128, relu) → (two heads)
-  - policy_head: Dense(64, relu) → Dense(6)  # logits
-  - value_head: Dense(64, relu) → Dense(1, tanh)
-- Use small weight decay L2 regularization
+## Input encoding
 
-Contracts
-- predict(model, s_canonical)::(logits::Vector{Float32}, value::Float32)
-  - Always interpret logits as corresponding to local indices 0..5
-- model parameters saved via BSON.jl or JLD2 with deterministic metadata (seed, Flux/Julia versions)
+- `encode_state(s)::Matrix{Float32}` returns shape **`(4, 12)`**.
+- Semantic planes:
+  1. normalized board seeds
+  2. side-to-move indicator plane
+  3. normalized captured seeds for player 1
+  4. normalized captured seeds for player 2
+- Current MLP path flattens this encoding to **48 Float32 features**.
 
-Training-time determinism
-- Control random seeds for weight init, data shuffling, and augmentation
-- Avoid non-deterministic GPU ops until later phases; document any ops that may vary between runs
+## Output contract
 
-Performance
-- Support batched inference: predict_batch(model, batch_states)
-- Use StaticArrays for single-state encoding where beneficial, but convert to dense batches for Flux
+- Policy head returns `Vector{Float32}` of length **6**.
+- Logits correspond to local actions **`1..6`**.
+- Value head returns a scalar in `[-1, 1]`.
 
-Testable properties
-- Predict on canonicalized identical states returns identical outputs
-- Serialization/deserialization of model preserves outputs on sample inputs (within floating precision)
+## Current implementation notes
+
+| Area | Current contract |
+|---|---|
+| Architecture config | Loaded from `src/Awale/config.toml` |
+| Forward path | Shared trunk + policy/value heads in Flux |
+| Policy activation | Final policy layer is unconstrained (`identity`) logits |
+| Save/load | Uses Julia `Serialization.serialize` / `deserialize` |
+
+## Determinism expectations
+
+- `predict(model, s)` must be deterministic for fixed weights and state.
+- `predict_batch` must preserve the same per-state semantics as `predict`.
+- Serialization round-trips must preserve outputs for the same model binary.
+
+## Explicit non-goals in the current repo state
+
+- No convolutional architecture yet.
+- No checkpoint metadata embedded with model binaries.
+- No BSON/JLD2 save format at the moment.
+
+## Testing checklist
+
+- [ ] `encode_state` shape is `(4, 12)`
+- [ ] policy head exposes raw logits
+- [ ] identical canonical states produce identical outputs
+- [ ] model save/load preserves predictions
