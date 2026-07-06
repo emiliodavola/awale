@@ -1,7 +1,7 @@
 const ROOT_DIR = @__DIR__
 include(joinpath(ROOT_DIR, "src", "Awale.jl"))
 using .Awale
-using .Awale.Evaluation: ModelAgent, result_from_terminal_state
+using .Awale.Evaluation: ModelAgent, evaluate_agents_on_openings, generate_opening_suite
 using .Awale.MCTS: MCTSSearch
 using .Awale.Model: load_model
 using Random
@@ -9,15 +9,16 @@ using TOML
 
 config = TOML.parsefile(joinpath(ROOT_DIR, "config.toml"))
 training_cfg = config["training"]
+selection_cfg = get(config, "selection", Dict{String, Any}())
 mcts_cfg = config["mcts"]
 
 CHECKPOINT_DIR = String(training_cfg["checkpoint_dir"])
 C_PUCT = Float32(mcts_cfg["c_puct"])
-DEFAULT_GAMES = 200
+DEFAULT_GAMES = Int(get(selection_cfg, "promotion_games", 200))
 DEFAULT_SIMS = [0, 50, 200]
-DEFAULT_OPENING_PLIES = [0, 2, 4, 6]
-OPENINGS_PER_PLY = 4
-OPENING_SEED = 20260705
+DEFAULT_OPENING_PLIES = Int[get(selection_cfg, "opening_plies", [0, 2, 4, 6, 8, 10])...]
+OPENINGS_PER_PLY = Int(get(selection_cfg, "openings_per_ply", 6))
+OPENING_SEED = Int(get(selection_cfg, "opening_seed", 20260705))
 
 function checkpoint_path(label)
     if label isa Int
@@ -71,73 +72,47 @@ function available_matchups()
     return matchups
 end
 
-function generate_opening_suite(; plies=DEFAULT_OPENING_PLIES, openings_per_ply::Int=OPENINGS_PER_PLY, seed::Int=OPENING_SEED)
-    rng = MersenneTwister(seed)
-    openings = Awale.GameState[]
+winner_label(label_a, label_b, results) = ifelse(results.wins > results.losses, checkpoint_label(label_a), ifelse(results.losses > results.wins, checkpoint_label(label_b), "tie"))
 
-    for ply_count in plies
-        for _ in 1:openings_per_ply
-            state = Awale.initial_state()
-            for _ in 1:ply_count
-                actions = Awale.legal_actions(state)
-                isempty(actions) && break
-                action = actions[rand(rng, 1:length(actions))]
-                state = Awale.transition(state, action)
-                Awale.is_terminal(state) && break
-            end
-            push!(openings, state)
-        end
-    end
-
-    return openings
+function winner_percentage(results)
+    decided = results.wins + results.losses
+    decided == 0 && return 0.0
+    return max(results.wins, results.losses) / decided * 100.0
 end
 
-function play_match_from_state(initial_state, agent_p1, agent_p2)
-    state = initial_state
-    turn = 1
-    turns_played = 0
-    max_turns = 1000
+const TABLE_WIDTHS = (checkpoint = 14, wins = 5, losses = 5, draws = 5, avg_turns = 9, who_wins = 32)
 
-    while !Awale.is_terminal(state) && turns_played < max_turns
-        current_agent = turn == 1 ? agent_p1 : agent_p2
-        action = Awale.Evaluation.select_action(current_agent, state)
-        state = Awale.transition(state, action)
-        turn = turn == 1 ? 2 : 1
-        turns_played += 1
-    end
+pad_cell(value, width::Int) = rpad(string(value), width)
 
-    return result_from_terminal_state(state), turns_played
+function format_header()
+    return join([
+        pad_cell("Checkpoint A", TABLE_WIDTHS.checkpoint),
+        pad_cell("Checkpoint B", TABLE_WIDTHS.checkpoint),
+        pad_cell("W", TABLE_WIDTHS.wins),
+        pad_cell("L", TABLE_WIDTHS.losses),
+        pad_cell("D", TABLE_WIDTHS.draws),
+        pad_cell("AvgTurns", TABLE_WIDTHS.avg_turns),
+        pad_cell("Who wins", TABLE_WIDTHS.who_wins),
+    ], " | ")
 end
 
-function evaluate_agents_on_openings(agent1, agent2, openings, games::Int)
-    wins = 0
-    losses = 0
-    draws = 0
-    total_turns = 0
-
-    for game_idx in 1:games
-        opening = openings[mod1(game_idx, length(openings))]
-        if game_idx % 2 == 0
-            result, turns = play_match_from_state(opening, agent1, agent2)
-        else
-            result, turns = play_match_from_state(opening, agent2, agent1)
-            result = -result
-        end
-
-        total_turns += turns
-        if result == 1
-            wins += 1
-        elseif result == -1
-            losses += 1
-        else
-            draws += 1
-        end
-    end
-
-    return (wins=wins, losses=losses, draws=draws, avg_turns=total_turns / games)
+function format_duel_result(label_a, label_b, results)
+    winner = winner_label(label_a, label_b, results)
+    winner_text = winner == "tie" ? "tie" : "$(winner) ($(round(winner_percentage(results), digits=1))% of decided games)"
+    return join([
+        pad_cell(checkpoint_label(label_a), TABLE_WIDTHS.checkpoint),
+        pad_cell(checkpoint_label(label_b), TABLE_WIDTHS.checkpoint),
+        pad_cell(results.wins, TABLE_WIDTHS.wins),
+        pad_cell(results.losses, TABLE_WIDTHS.losses),
+        pad_cell(results.draws, TABLE_WIDTHS.draws),
+        pad_cell(round(results.avg_turns, digits=2), TABLE_WIDTHS.avg_turns),
+        pad_cell(winner_text, TABLE_WIDTHS.who_wins),
+    ], " | ")
 end
 
-function run_duel(label_a, label_b; sims::Int, games::Int, openings=generate_opening_suite())
+stable_label_seed(label) = label isa Int ? label : sum(codeunits(String(label)))
+
+function run_duel(label_a, label_b; sims::Int, games::Int, openings=generate_opening_suite(plies=DEFAULT_OPENING_PLIES, openings_per_ply=OPENINGS_PER_PLY, seed=OPENING_SEED))
     path_a = checkpoint_path(label_a)
     path_b = checkpoint_path(label_b)
 
@@ -149,7 +124,8 @@ function run_duel(label_a, label_b; sims::Int, games::Int, openings=generate_ope
     model_b = load_model(path_b)
     agent_a = ModelAgent(MCTSSearch(model_a, C_PUCT, Dict{UInt64, Tuple{Float32, Int64}}()), sims)
     agent_b = ModelAgent(MCTSSearch(model_b, C_PUCT, Dict{UInt64, Tuple{Float32, Int64}}()), sims)
-    return evaluate_agents_on_openings(agent_a, agent_b, openings, games)
+    duel_rng = Random.MersenneTwister(OPENING_SEED + 1000 * sims + 31 * stable_label_seed(label_a) + stable_label_seed(label_b))
+    return evaluate_agents_on_openings(agent_a, agent_b, openings, games, duel_rng)
 end
 
 function main()
@@ -161,18 +137,20 @@ function main()
         return
     end
 
-    openings = generate_opening_suite()
+    openings = generate_opening_suite(plies=DEFAULT_OPENING_PLIES, openings_per_ply=OPENINGS_PER_PLY, seed=OPENING_SEED)
     println("Checkpoints detectados: $(join(checkpoint_label.(existing_checkpoint_labels()), ", "))")
-    println("Opening suite: $(length(openings)) posiciones reproducibles")
+    println("Opening suite: $(length(openings)) posiciones reproducibles (plies=$(DEFAULT_OPENING_PLIES), openings_per_ply=$(OPENINGS_PER_PLY))")
 
     for sims in DEFAULT_SIMS
         println("\nSims per side: $sims")
+        println(format_header())
+        println(repeat("-", sum(values(TABLE_WIDTHS)) + 3 * 6))
         for (label_a, label_b) in matchups
             results = run_duel(label_a, label_b; sims=sims, games=DEFAULT_GAMES, openings=openings)
             if results === nothing
                 println("$(checkpoint_label(label_a)) vs $(checkpoint_label(label_b)) => skipped (missing checkpoint)")
             else
-                println("$(checkpoint_label(label_a)) vs $(checkpoint_label(label_b)) => W:$(results.wins) L:$(results.losses) D:$(results.draws) AvgTurns:$(round(results.avg_turns, digits=2))")
+                println(format_duel_result(label_a, label_b, results))
             end
         end
     end

@@ -5,7 +5,7 @@ using ..Env: is_terminal, transition, legal_actions, reward
 using ..MCTS: MCTSSearch, search
 using Random
 
-export RandomAgent, HeuristicAgent, ModelAgent, evaluate_agents, play_match
+export RandomAgent, HeuristicAgent, ModelAgent, evaluate_agents, evaluate_agents_on_openings, generate_opening_suite, play_match
 
 function result_from_terminal_state(state::GameState)::Int
     terminal_reward = reward(state)
@@ -54,8 +54,8 @@ function select_action(agent::ModelAgent, s::GameState, rng=Random.default_rng()
     return search(agent.mcts, s, agent.sims, rng; add_root_noise=false)
 end
 
-function play_match(agent_p1, agent_p2, config::GameConfig=GameConfig(), rng=Random.default_rng())
-    state = initial_state(config)
+function play_match_from_state(initial_state::GameState, agent_p1, agent_p2, rng=Random.default_rng())
+    state = initial_state
     turn = 1
     turns_played = 0
     max_turns = 1000
@@ -69,6 +69,59 @@ function play_match(agent_p1, agent_p2, config::GameConfig=GameConfig(), rng=Ran
     end
 
     return result_from_terminal_state(state), turns_played
+end
+
+function play_match(agent_p1, agent_p2, config::GameConfig=GameConfig(), rng=Random.default_rng())
+    return play_match_from_state(initial_state(config), agent_p1, agent_p2, rng)
+end
+
+function generate_opening_suite(; plies::Vector{Int}, openings_per_ply::Int, seed::Int, config::GameConfig=GameConfig())
+    rng = MersenneTwister(seed)
+    openings = GameState[]
+
+    for ply_count in plies
+        for _ in 1:openings_per_ply
+            state = initial_state(config)
+            for _ in 1:ply_count
+                actions = legal_actions(state)
+                isempty(actions) && break
+                action = actions[rand(rng, 1:length(actions))]
+                state = transition(state, action)
+                is_terminal(state) && break
+            end
+            push!(openings, state)
+        end
+    end
+
+    return openings
+end
+
+function evaluate_agents_on_openings(agent1, agent2, openings, n_games::Int, rng=Random.default_rng())
+    wins = 0
+    losses = 0
+    draws = 0
+    total_turns = 0
+
+    for game_idx in 1:n_games
+        opening = openings[mod1(game_idx, length(openings))]
+        if game_idx % 2 == 0
+            result, turns = play_match_from_state(opening, agent1, agent2, rng)
+        else
+            result, turns = play_match_from_state(opening, agent2, agent1, rng)
+            result = -result
+        end
+
+        total_turns += turns
+        if result == 1
+            wins += 1
+        elseif result == -1
+            losses += 1
+        else
+            draws += 1
+        end
+    end
+
+    return (wins=wins, losses=losses, draws=draws, avg_turns=total_turns / n_games)
 end
 
 function evaluate_agents(agent1, agent2, n_games::Int, config::GameConfig=GameConfig(), rng=Random.default_rng())
