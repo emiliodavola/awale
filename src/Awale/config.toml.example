@@ -1,4 +1,5 @@
-# Awale Model Configuration
+# Awale Model Configuration Template
+# Copy this file to src/Awale/config.toml if you want to experiment with the model architecture.
 
 [model]
 input_dim = 48

@@ -32,6 +32,7 @@ skills-lock.json
 .pi/
 config.json
 config.toml
+src/Awale/config.toml
 *.onnx
 *.safetensors
 !model/config.json
