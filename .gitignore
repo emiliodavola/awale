@@ -31,6 +31,7 @@ skills-lock.json
 .claude/
 .pi/
 config.json
+config.toml
 *.onnx
 *.safetensors
 !model/config.json

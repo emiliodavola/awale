@@ -135,12 +135,55 @@ end
             sims=1,
             batch_size=8,
             updates_per_iteration=2,
+            replay_recent_fraction=0.5,
+            replay_recent_window=32,
             temperature_moves=2,
             rng=rng,
         )
 
         @test isfinite(loss)
         @test length(replay_buffer) > 0
+
+        @test_throws ArgumentError Awale.run_training_iteration(
+            mcts,
+            optimizer,
+            model,
+            replay_buffer;
+            n_games=1,
+            sims=1,
+            batch_size=8,
+            updates_per_iteration=1,
+            replay_recent_fraction=0.5,
+            replay_recent_window=0,
+            temperature_moves=2,
+            rng=MersenneTwister(11),
+        )
+    end
+
+    @testset "replay sampler supports recent mix" begin
+        rb = Awale.ReplayBuffers.ReplayBuffer(5)
+        state = Awale.initial_state()
+        for idx in 1:7
+            Awale.ReplayBuffers.push_experience!(rb, Awale.ReplayBuffers.Experience(state, zeros(Float32, 6), Float32(idx)))
+        end
+
+        @test Awale.ReplayBuffers.chronological_indices(rb) == [3, 4, 5, 1, 2]
+
+        recent_only = Awale.ReplayBuffers.sample_batch(rb, 2, MersenneTwister(7); recent_fraction=1.0, recent_window=2)
+        @test sort([exp.z_target for exp in recent_only]) == Float32[6, 7]
+
+        mixed_a = Awale.ReplayBuffers.sample_batch(rb, 4, MersenneTwister(9); recent_fraction=0.5, recent_window=2)
+        mixed_b = Awale.ReplayBuffers.sample_batch(rb, 4, MersenneTwister(9); recent_fraction=0.5, recent_window=2)
+        @test [exp.z_target for exp in mixed_a] == [exp.z_target for exp in mixed_b]
+        @test count(exp -> exp.z_target in Float32[6, 7], mixed_a) >= 2
+
+        single = Awale.ReplayBuffers.sample_batch(rb, 1, MersenneTwister(3); recent_fraction=0.5, recent_window=2)
+        @test single[1].z_target in Float32[6, 7]
+
+        @test_throws ArgumentError Awale.ReplayBuffers.sample_batch(rb, 1, MersenneTwister(1); recent_fraction=-0.1, recent_window=2)
+        @test_throws ArgumentError Awale.ReplayBuffers.sample_batch(rb, 1, MersenneTwister(1); recent_fraction=1.1, recent_window=2)
+        @test_throws ArgumentError Awale.ReplayBuffers.sample_batch(rb, 1, MersenneTwister(1); recent_fraction=0.5, recent_window=-1)
+        @test_throws ArgumentError Awale.ReplayBuffers.sample_batch(rb, 1, MersenneTwister(1); recent_fraction=0.5, recent_window=0)
     end
 
     @testset "training snapshot policy writes only milestone snapshots" begin
@@ -158,6 +201,90 @@ end
         @test !train_module.should_save_snapshot(3, 25, 25)
         @test !train_module.should_save_snapshot(24, 25, 25)
         @test !train_module.should_save_snapshot(27, 27, 25)
+        @test train_module.UPDATES_PER_ITERATION == 16
+        @test train_module.decided_win_rate((wins=6, losses=4, draws=0, avg_turns=0.0)) == 60.0
+        @test train_module.decided_win_rate((wins=0, losses=0, draws=10, avg_turns=0.0)) == 50.0
+        @test train_module.validate_training_config() === nothing
+        train_module.REPLAY_RECENT_FRACTION = 1.5
+        @test_throws ArgumentError train_module.validate_training_config()
+        train_module.REPLAY_RECENT_FRACTION = 0.5
+        train_module.REPLAY_RECENT_WINDOW = -1
+        @test_throws ArgumentError train_module.validate_training_config()
+        train_module.REPLAY_RECENT_WINDOW = 0
+        @test_throws ArgumentError train_module.validate_training_config()
+        train_module.REPLAY_RECENT_FRACTION = 0.0
+        @test train_module.validate_training_config() === nothing
+        train_module.REPLAY_RECENT_FRACTION = 0.5
+        train_module.REPLAY_RECENT_WINDOW = 4096
+        @test train_module.selection_gate_status(56.0, NamedTuple[]).promoted
+        @test !train_module.selection_gate_status(54.0, NamedTuple[]).promoted
+        @test !train_module.selection_gate_status(nothing, [(name="random", results=(wins=0, losses=0, draws=0, avg_turns=0.0), decided_win_rate=49.0)]).promoted
+        @test_throws ArgumentError train_module.validate_selection_config(0, [0, 2], 1)
+        @test_throws ArgumentError train_module.validate_selection_config(2, Int[], 1)
+        @test_throws ArgumentError train_module.validate_selection_config(2, [0, 2], 0)
+
+        mktemp() do path, io
+            write(io, "last_iter = 7\nbest_win_rate = 61.5\n")
+            flush(io)
+            close(io)
+            last_iter, best_selection_score = train_module.read_training_state(path)
+            @test last_iter == 7
+            @test best_selection_score == 61.5
+        end
+
+        mktempdir() do tmpdir
+            best_path = joinpath(tmpdir, "model_best.bin")
+            train_module.BEST_CHECKPOINT_PATH = best_path
+            initial_model = train_module.Awale.create_model()
+            candidate_model = train_module.Awale.create_model()
+            train_module.save_model(initial_model, best_path)
+            before_bytes = read(best_path)
+            score_ref = Ref(12.0)
+
+            blocked = (promoted=false, promotion_score=77.0)
+            @test !train_module.maybe_promote_best!(candidate_model, score_ref, blocked)
+            @test score_ref[] == 12.0
+            @test read(best_path) == before_bytes
+
+            promoted = (promoted=true, promotion_score=77.0)
+            @test train_module.maybe_promote_best!(candidate_model, score_ref, promoted)
+            @test score_ref[] == 77.0
+            @test read(best_path) != before_bytes
+
+            train_module.BEST_TARGET_SIMS = 0
+            train_module.BEST_PROMOTION_GAMES = 2
+            train_module.BEST_OPENING_PLIES = [0]
+            train_module.BEST_OPENINGS_PER_PLY = 1
+            train_module.BEST_SELECTION_SEED = 123
+            train_module.USE_RANDOM_ANCHOR = true
+            train_module.USE_HEURISTIC_ANCHOR = false
+            train_module.save_model(initial_model, best_path)
+            promotion_a = train_module.evaluate_best_promotion(candidate_model)
+            promotion_b = train_module.evaluate_best_promotion(candidate_model)
+            @test promotion_a.promoted == promotion_b.promoted
+            @test promotion_a.promotion_score == promotion_b.promotion_score
+            @test promotion_a.current_best_rate == promotion_b.current_best_rate
+            @test promotion_a.anchor_reports == promotion_b.anchor_reports
+        end
+
+        mktempdir() do tmpdir
+            invalid_checkpoint_dir = joinpath(tmpdir, "invalid-checkpoints")
+            train_module.CHECKPOINT_DIR = invalid_checkpoint_dir
+            train_module.BEST_PROMOTION_GAMES = 0
+            @test_throws ArgumentError train_module.main(String["--reset"])
+            @test !isdir(invalid_checkpoint_dir)
+        end
+
+        mktempdir() do tmpdir
+            invalid_training_checkpoint_dir = joinpath(tmpdir, "invalid-training-checkpoints")
+            train_module.CHECKPOINT_DIR = invalid_training_checkpoint_dir
+            train_module.BEST_PROMOTION_GAMES = 2
+            train_module.REPLAY_RECENT_FRACTION = 0.5
+            train_module.REPLAY_RECENT_WINDOW = 0
+            @test_throws ArgumentError train_module.main(String["--reset"])
+            @test !isdir(invalid_training_checkpoint_dir)
+            train_module.REPLAY_RECENT_WINDOW = 4096
+        end
 
         mktempdir() do tmpdir
             checkpoint_dir = joinpath(tmpdir, "checkpoints")
@@ -176,6 +303,12 @@ end
             train_module.CHECKPOINT_EVERY = 25
             train_module.EVAL_GAMES = 2
             train_module.SIMS_PER_EVAL = 1
+            train_module.BEST_TARGET_SIMS = 1
+            train_module.BEST_PROMOTION_GAMES = 2
+            train_module.BEST_OPENING_PLIES = [0]
+            train_module.BEST_OPENINGS_PER_PLY = 1
+            train_module.USE_RANDOM_ANCHOR = false
+            train_module.USE_HEURISTIC_ANCHOR = false
 
             Random.seed!(1234)
             train_module.save_model(train_module.Awale.create_model(), train_module.LAST_CHECKPOINT_PATH)
@@ -190,6 +323,7 @@ end
             end
 
             @test occursin("Reanudando desde la iteración 24", first_output)
+            @test occursin("Best-selection target: 1 sims, 2 games, 1 openings, threshold", first_output)
             @test isfile(joinpath(checkpoint_dir, "model_iter_25.bin"))
             @test !isfile(joinpath(checkpoint_dir, "model_iter_26.bin"))
             @test !isfile(joinpath(checkpoint_dir, "model_iter_27.bin"))
@@ -239,9 +373,14 @@ end
         @test isdefined(arena_module, :main)
         @test arena_module.checkpoint_label(5) == "iter_5"
 
-        openings_a = arena_module.generate_opening_suite(seed=123, openings_per_ply=2)
-        openings_b = arena_module.generate_opening_suite(seed=123, openings_per_ply=2)
+        openings_a = arena_module.generate_opening_suite(plies=[0, 2, 4, 6], seed=123, openings_per_ply=2)
+        openings_b = arena_module.generate_opening_suite(plies=[0, 2, 4, 6], seed=123, openings_per_ply=2)
         @test length(openings_a) == 8
+        @test arena_module.winner_label(5, 10, (wins=3, losses=2, draws=1)) == "iter_5"
+        @test arena_module.winner_label(5, 10, (wins=2, losses=3, draws=1)) == "iter_10"
+        @test arena_module.winner_label(5, 10, (wins=2, losses=2, draws=4)) == "tie"
+        @test occursin("Who wins", arena_module.format_header())
+        @test occursin("iter_5", arena_module.format_duel_result(5, 10, (wins=3, losses=2, draws=1, avg_turns=42.5)))
         @test [arena_module.Awale.serialize_state(s) for s in openings_a] == [arena_module.Awale.serialize_state(s) for s in openings_b]
 
         original_checkpoint_dir = arena_module.CHECKPOINT_DIR
@@ -253,7 +392,40 @@ end
             touch(joinpath(tmpdir, "model_best.bin"))
             touch(joinpath(tmpdir, "model_final.bin"))
             arena_module.CHECKPOINT_DIR = tmpdir
-            @test arena_module.available_matchups() == [(5, 10), (10, 25), (25, 26), (26, 27)]
+            labels = arena_module.existing_checkpoint_labels()
+            numeric_labels = arena_module.numeric_checkpoint_labels(labels)
+            @test numeric_labels == [5, 10, 25, 26, 27]
+            @test arena_module.available_matchups(numeric_labels) == [(5, 10), (10, 25), (25, 26), (26, 27)]
+            @test arena_module.latest_anchor_matchups(numeric_labels) == [(27, 26), (27, 25), (27, 10)]
+            @test arena_module.latest_anchor_matchups(numeric_labels, 2) == [(27, 26), (27, 25)]
+            @test arena_module.operational_alias_matchups(labels, numeric_labels) == [("best", 27), ("last", 27), ("final", 27), ("best", "last"), ("best", "final"), ("final", "last")]
+            @test arena_module.collect_duel_labels([(5, 10), (10, 25), ("best", 25)]) == Any[5, 10, 25, "best"]
+        end
+
+        mktempdir() do tmpdir
+            arena_module.CHECKPOINT_DIR = tmpdir
+            arena_module.Awale.Model.save_model(arena_module.Awale.create_model(), joinpath(tmpdir, "model_iter_5.bin"))
+            arena_module.Awale.Model.save_model(arena_module.Awale.create_model(), joinpath(tmpdir, "model_iter_10.bin"))
+            openings = arena_module.generate_opening_suite(plies=[0], seed=321, openings_per_ply=1)
+            duel_a = arena_module.run_duel(5, 10; sims=0, games=2, openings=openings)
+            duel_b = arena_module.run_duel(5, 10; sims=0, games=2, openings=openings)
+            @test duel_a == duel_b
+        end
+
+        mktempdir() do tmpdir
+            arena_module.CHECKPOINT_DIR = tmpdir
+            Random.seed!(1)
+            arena_module.Awale.Model.save_model(arena_module.Awale.create_model(), joinpath(tmpdir, "model_best.bin"))
+            arena_module.Awale.Model.save_model(arena_module.Awale.create_model(), joinpath(tmpdir, "model_iter_5.bin"))
+            cache = arena_module.build_model_cache(["best", 5])
+            openings = arena_module.generate_opening_suite(plies=[0], seed=321, openings_per_ply=1)
+            rm(joinpath(tmpdir, "model_best.bin"))
+            @test arena_module.run_duel("best", 5; sims=0, games=2, openings=openings, model_cache=cache) !== nothing
+            @test arena_module.run_duel("best", 5; sims=0, games=2, openings=openings) === nothing
+            arena_module.Awale.Model.save_model(arena_module.Awale.create_model(), joinpath(tmpdir, "model_best.bin"))
+            partial_cache = arena_module.build_model_cache([5])
+            @test arena_module.run_duel("best", 5; sims=0, games=2, openings=openings, model_cache=partial_cache) === nothing
+            @test arena_module.run_duel("best", 5; sims=0, games=2, openings=openings) !== nothing
         end
 
         mktempdir() do tmpdir
@@ -269,6 +441,44 @@ end
                 read(path, String)
             end
             @test occursin("No hay suficientes checkpoints compatibles para correr el arena.", output)
+        end
+
+        mktempdir() do tmpdir
+            for iter in (100, 125, 150, 175)
+                arena_module.Awale.Model.save_model(arena_module.Awale.create_model(), joinpath(tmpdir, "model_iter_$(iter).bin"))
+            end
+            arena_module.Awale.Model.save_model(arena_module.Awale.create_model(), joinpath(tmpdir, "model_best.bin"))
+            arena_module.Awale.Model.save_model(arena_module.Awale.create_model(), joinpath(tmpdir, "model_last.bin"))
+            arena_module.Awale.Model.save_model(arena_module.Awale.create_model(), joinpath(tmpdir, "model_final.bin"))
+            arena_module.CHECKPOINT_DIR = tmpdir
+            arena_module.training_cfg["last_checkpoint_path"] = "model_last.bin"
+            arena_module.training_cfg["best_checkpoint_path"] = "model_best.bin"
+            arena_module.config["evaluation"]["checkpoint_path"] = "model_final.bin"
+            arena_module.DEFAULT_GAMES = 2
+            arena_module.DEFAULT_SIMS = [0]
+            output = mktemp() do path, io
+                redirect_stdout(io) do
+                    arena_module.main(post_freeze_callback=snapshot -> begin
+                        rm(joinpath(tmpdir, "model_best.bin"))
+                        arena_module.Awale.Model.save_model(arena_module.Awale.create_model(), joinpath(tmpdir, "model_iter_200.bin"))
+                        @test snapshot.numeric_labels == [100, 125, 150, 175]
+                        @test snapshot.planned_labels == Any[100, 125, 150, 175, "best", "last", "final"]
+                    end)
+                end
+                flush(io)
+                close(io)
+                read(path, String)
+            end
+            @test occursin("Frozen labels for this run:", output)
+            @test occursin("Planned labels for this run:", output)
+            @test occursin("Latest checkpoint vs prior anchors (last 3)", output)
+            @test occursin("iter_175       | iter_150", output)
+            @test occursin("iter_175       | iter_125", output)
+            @test occursin("Operational aliases", output)
+            @test occursin("best           | iter_175", output)
+            @test occursin("last           | iter_175", output)
+            @test occursin("final          | iter_175", output)
+            @test !occursin("iter_200", output)
         end
         arena_module.CHECKPOINT_DIR = original_checkpoint_dir
     end
