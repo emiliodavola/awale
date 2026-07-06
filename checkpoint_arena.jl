@@ -20,15 +20,19 @@ DEFAULT_OPENING_PLIES = Int[get(selection_cfg, "opening_plies", [0, 2, 4, 6, 8, 
 OPENINGS_PER_PLY = Int(get(selection_cfg, "openings_per_ply", 6))
 OPENING_SEED = Int(get(selection_cfg, "opening_seed", 20260705))
 
+function alias_checkpoint_path(configured_path::AbstractString, default_filename::AbstractString)
+    return isabspath(configured_path) ? configured_path : joinpath(CHECKPOINT_DIR, basename(configured_path == "" ? default_filename : configured_path))
+end
+
 function checkpoint_path(label)
     if label isa Int
         return joinpath(CHECKPOINT_DIR, "model_iter_$(label).bin")
     end
 
     mapping = Dict(
-        "last" => String(get(training_cfg, "last_checkpoint_path", joinpath(CHECKPOINT_DIR, "model_last.bin"))),
-        "best" => String(get(training_cfg, "best_checkpoint_path", joinpath(CHECKPOINT_DIR, "model_best.bin"))),
-        "final" => String(config["evaluation"]["checkpoint_path"]),
+        "last" => alias_checkpoint_path(String(get(training_cfg, "last_checkpoint_path", "model_last.bin")), "model_last.bin"),
+        "best" => alias_checkpoint_path(String(get(training_cfg, "best_checkpoint_path", "model_best.bin")), "model_best.bin"),
+        "final" => alias_checkpoint_path(String(config["evaluation"]["checkpoint_path"]), "model_final.bin"),
     )
 
     return get(mapping, String(label), joinpath(CHECKPOINT_DIR, String(label)))
@@ -61,8 +65,12 @@ function existing_checkpoint_labels()
     return labels
 end
 
+function numeric_checkpoint_labels()
+    return sort([label for label in existing_checkpoint_labels() if label isa Int])
+end
+
 function available_matchups()
-    numeric_labels = sort([label for label in existing_checkpoint_labels() if label isa Int])
+    numeric_labels = numeric_checkpoint_labels()
     matchups = Tuple{Int, Int}[]
 
     for idx in 1:(length(numeric_labels) - 1)
@@ -70,6 +78,48 @@ function available_matchups()
     end
 
     return matchups
+end
+
+LATEST_ANCHOR_COUNT = 3
+
+function latest_anchor_matchups(anchor_count::Int=LATEST_ANCHOR_COUNT)
+    numeric_labels = numeric_checkpoint_labels()
+    length(numeric_labels) <= 1 && return Tuple{Int, Int}[]
+
+    latest = numeric_labels[end]
+    anchor_start = max(1, length(numeric_labels) - anchor_count)
+    anchors = numeric_labels[anchor_start:(end - 1)]
+    return [(latest, anchor) for anchor in reverse(anchors)]
+end
+
+function operational_alias_matchups()
+    numeric_labels = numeric_checkpoint_labels()
+    isempty(numeric_labels) && return Tuple{Any, Any}[]
+
+    latest = numeric_labels[end]
+    labels = Set(existing_checkpoint_labels())
+    matchups = Tuple{Any, Any}[]
+
+    if "best" in labels
+        push!(matchups, ("best", latest))
+    end
+    if "last" in labels
+        push!(matchups, ("last", latest))
+    end
+    if "final" in labels
+        push!(matchups, ("final", latest))
+    end
+    if "best" in labels && "last" in labels
+        push!(matchups, ("best", "last"))
+    end
+    if "best" in labels && "final" in labels
+        push!(matchups, ("best", "final"))
+    end
+    if "final" in labels && "last" in labels
+        push!(matchups, ("final", "last"))
+    end
+
+    return unique(matchups)
 end
 
 winner_label(label_a, label_b, results) = ifelse(results.wins > results.losses, checkpoint_label(label_a), ifelse(results.losses > results.wins, checkpoint_label(label_b), "tie"))
@@ -131,8 +181,10 @@ end
 function main()
     println("--- Awale checkpoint arena ---")
     matchups = available_matchups()
+    anchor_matchups = latest_anchor_matchups()
+    alias_matchups = operational_alias_matchups()
 
-    if isempty(matchups)
+    if isempty(matchups) && isempty(anchor_matchups) && isempty(alias_matchups)
         println("No hay suficientes checkpoints compatibles para correr el arena.")
         return
     end
@@ -151,6 +203,34 @@ function main()
                 println("$(checkpoint_label(label_a)) vs $(checkpoint_label(label_b)) => skipped (missing checkpoint)")
             else
                 println(format_duel_result(label_a, label_b, results))
+            end
+        end
+
+        if !isempty(anchor_matchups)
+            println("\nLatest checkpoint vs prior anchors (last $(LATEST_ANCHOR_COUNT))")
+            println(format_header())
+            println(repeat("-", sum(values(TABLE_WIDTHS)) + 3 * 6))
+            for (label_a, label_b) in anchor_matchups
+                results = run_duel(label_a, label_b; sims=sims, games=DEFAULT_GAMES, openings=openings)
+                if results === nothing
+                    println("$(checkpoint_label(label_a)) vs $(checkpoint_label(label_b)) => skipped (missing checkpoint)")
+                else
+                    println(format_duel_result(label_a, label_b, results))
+                end
+            end
+        end
+
+        if !isempty(alias_matchups)
+            println("\nOperational aliases")
+            println(format_header())
+            println(repeat("-", sum(values(TABLE_WIDTHS)) + 3 * 6))
+            for (label_a, label_b) in alias_matchups
+                results = run_duel(label_a, label_b; sims=sims, games=DEFAULT_GAMES, openings=openings)
+                if results === nothing
+                    println("$(checkpoint_label(label_a)) vs $(checkpoint_label(label_b)) => skipped (missing checkpoint)")
+                else
+                    println(format_duel_result(label_a, label_b, results))
+                end
             end
         end
     end

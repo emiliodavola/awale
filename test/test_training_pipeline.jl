@@ -392,7 +392,11 @@ end
             touch(joinpath(tmpdir, "model_best.bin"))
             touch(joinpath(tmpdir, "model_final.bin"))
             arena_module.CHECKPOINT_DIR = tmpdir
+            @test arena_module.numeric_checkpoint_labels() == [5, 10, 25, 26, 27]
             @test arena_module.available_matchups() == [(5, 10), (10, 25), (25, 26), (26, 27)]
+            @test arena_module.latest_anchor_matchups() == [(27, 26), (27, 25), (27, 10)]
+            @test arena_module.latest_anchor_matchups(2) == [(27, 26), (27, 25)]
+            @test arena_module.operational_alias_matchups() == [("best", 27), ("last", 27), ("final", 27), ("best", "last"), ("best", "final"), ("final", "last")]
         end
 
         mktempdir() do tmpdir
@@ -418,6 +422,36 @@ end
                 read(path, String)
             end
             @test occursin("No hay suficientes checkpoints compatibles para correr el arena.", output)
+        end
+
+        mktempdir() do tmpdir
+            for iter in (100, 125, 150, 175)
+                arena_module.Awale.Model.save_model(arena_module.Awale.create_model(), joinpath(tmpdir, "model_iter_$(iter).bin"))
+            end
+            arena_module.Awale.Model.save_model(arena_module.Awale.create_model(), joinpath(tmpdir, "model_best.bin"))
+            arena_module.Awale.Model.save_model(arena_module.Awale.create_model(), joinpath(tmpdir, "model_last.bin"))
+            arena_module.Awale.Model.save_model(arena_module.Awale.create_model(), joinpath(tmpdir, "model_final.bin"))
+            arena_module.CHECKPOINT_DIR = tmpdir
+            arena_module.training_cfg["last_checkpoint_path"] = "model_last.bin"
+            arena_module.training_cfg["best_checkpoint_path"] = "model_best.bin"
+            arena_module.config["evaluation"]["checkpoint_path"] = "model_final.bin"
+            arena_module.DEFAULT_GAMES = 2
+            arena_module.DEFAULT_SIMS = [0]
+            output = mktemp() do path, io
+                redirect_stdout(io) do
+                    arena_module.main()
+                end
+                flush(io)
+                close(io)
+                read(path, String)
+            end
+            @test occursin("Latest checkpoint vs prior anchors (last 3)", output)
+            @test occursin("iter_175       | iter_150", output)
+            @test occursin("iter_175       | iter_125", output)
+            @test occursin("Operational aliases", output)
+            @test occursin("best           | iter_175", output)
+            @test occursin("last           | iter_175", output)
+            @test occursin("final          | iter_175", output)
         end
         arena_module.CHECKPOINT_DIR = original_checkpoint_dir
     end
