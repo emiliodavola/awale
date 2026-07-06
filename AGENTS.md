@@ -19,6 +19,8 @@ The project follows a specification-driven workflow. **Always consult the `spec/
 
 Use the project environment (`--project=.`) for all operations to ensure reproducible dependencies.
 
+**Language Discipline**: This is a Julia project. Prefer Julia and shell-native tools for repository tasks, tests, scripts, quick automation, and file transformations. Do not introduce Python for ad-hoc repo operations unless the user explicitly asks for it or a Python-only tool is already part of the repository workflow. **Never use Python as the default scratch language in this repository.**
+
 **Important Shell Quoting**: When running Julia code via `-e`, use **single quotes** (`'`) for the shell wrapper and **double quotes** (`"`) for internal Julia strings to avoid escaping issues: `julia --project=. 'using Pkg; Pkg.add("PackageName")'`.
 
 - **Environment Setup**: `julia --project=. -e 'using Pkg; Pkg.instantiate()'`
@@ -76,6 +78,8 @@ end
 - **No Method Overwriting**: Never define the same function signature twice within a module (e.g., two `predict(...)` functions). This will cause critical failures during Julia's module precompilation.
 - **Encoding Consistency**: Always use the canonical `encode_state()` function to prepare inputs for the neural network. Manual normalization or bypassing this function leads to `DimensionMismatch` errors because the current model path expects a flattened `4 x 12` encoding (48 Float32 features).
 - Syntax Clarity: Do not apply Python syntax patterns to Julia. For example, avoid using the `*` operator for string repetition (use repeat() instead).
+- Tooling Discipline: For one-off automation or repository edits during development, prefer Julia snippets or shell-native tools (`awk`, `sed`, PowerShell) over Python helpers. Python is opt-in here, not the default scratch language.
+- Hard Rule: Never create or run ad-hoc Python scratch scripts for repository maintenance, test orchestration, output rewriting, or quick file transforms in this repo unless the user explicitly requests Python for that task.
 
 To ensure seamless integration with Zygote and Optimisers, follow these rules:
 
