@@ -135,12 +135,55 @@ end
             sims=1,
             batch_size=8,
             updates_per_iteration=2,
+            replay_recent_fraction=0.5,
+            replay_recent_window=32,
             temperature_moves=2,
             rng=rng,
         )
 
         @test isfinite(loss)
         @test length(replay_buffer) > 0
+
+        @test_throws ArgumentError Awale.run_training_iteration(
+            mcts,
+            optimizer,
+            model,
+            replay_buffer;
+            n_games=1,
+            sims=1,
+            batch_size=8,
+            updates_per_iteration=1,
+            replay_recent_fraction=0.5,
+            replay_recent_window=0,
+            temperature_moves=2,
+            rng=MersenneTwister(11),
+        )
+    end
+
+    @testset "replay sampler supports recent mix" begin
+        rb = Awale.ReplayBuffers.ReplayBuffer(5)
+        state = Awale.initial_state()
+        for idx in 1:7
+            Awale.ReplayBuffers.push_experience!(rb, Awale.ReplayBuffers.Experience(state, zeros(Float32, 6), Float32(idx)))
+        end
+
+        @test Awale.ReplayBuffers.chronological_indices(rb) == [3, 4, 5, 1, 2]
+
+        recent_only = Awale.ReplayBuffers.sample_batch(rb, 2, MersenneTwister(7); recent_fraction=1.0, recent_window=2)
+        @test sort([exp.z_target for exp in recent_only]) == Float32[6, 7]
+
+        mixed_a = Awale.ReplayBuffers.sample_batch(rb, 4, MersenneTwister(9); recent_fraction=0.5, recent_window=2)
+        mixed_b = Awale.ReplayBuffers.sample_batch(rb, 4, MersenneTwister(9); recent_fraction=0.5, recent_window=2)
+        @test [exp.z_target for exp in mixed_a] == [exp.z_target for exp in mixed_b]
+        @test count(exp -> exp.z_target in Float32[6, 7], mixed_a) >= 2
+
+        single = Awale.ReplayBuffers.sample_batch(rb, 1, MersenneTwister(3); recent_fraction=0.5, recent_window=2)
+        @test single[1].z_target in Float32[6, 7]
+
+        @test_throws ArgumentError Awale.ReplayBuffers.sample_batch(rb, 1, MersenneTwister(1); recent_fraction=-0.1, recent_window=2)
+        @test_throws ArgumentError Awale.ReplayBuffers.sample_batch(rb, 1, MersenneTwister(1); recent_fraction=1.1, recent_window=2)
+        @test_throws ArgumentError Awale.ReplayBuffers.sample_batch(rb, 1, MersenneTwister(1); recent_fraction=0.5, recent_window=-1)
+        @test_throws ArgumentError Awale.ReplayBuffers.sample_batch(rb, 1, MersenneTwister(1); recent_fraction=0.5, recent_window=0)
     end
 
     @testset "training snapshot policy writes only milestone snapshots" begin
@@ -158,8 +201,21 @@ end
         @test !train_module.should_save_snapshot(3, 25, 25)
         @test !train_module.should_save_snapshot(24, 25, 25)
         @test !train_module.should_save_snapshot(27, 27, 25)
+        @test train_module.UPDATES_PER_ITERATION == 16
         @test train_module.decided_win_rate((wins=6, losses=4, draws=0, avg_turns=0.0)) == 60.0
         @test train_module.decided_win_rate((wins=0, losses=0, draws=10, avg_turns=0.0)) == 50.0
+        @test train_module.validate_training_config() === nothing
+        train_module.REPLAY_RECENT_FRACTION = 1.5
+        @test_throws ArgumentError train_module.validate_training_config()
+        train_module.REPLAY_RECENT_FRACTION = 0.5
+        train_module.REPLAY_RECENT_WINDOW = -1
+        @test_throws ArgumentError train_module.validate_training_config()
+        train_module.REPLAY_RECENT_WINDOW = 0
+        @test_throws ArgumentError train_module.validate_training_config()
+        train_module.REPLAY_RECENT_FRACTION = 0.0
+        @test train_module.validate_training_config() === nothing
+        train_module.REPLAY_RECENT_FRACTION = 0.5
+        train_module.REPLAY_RECENT_WINDOW = 4096
         @test train_module.selection_gate_status(56.0, NamedTuple[]).promoted
         @test !train_module.selection_gate_status(54.0, NamedTuple[]).promoted
         @test !train_module.selection_gate_status(nothing, [(name="random", results=(wins=0, losses=0, draws=0, avg_turns=0.0), decided_win_rate=49.0)]).promoted
@@ -217,6 +273,17 @@ end
             train_module.BEST_PROMOTION_GAMES = 0
             @test_throws ArgumentError train_module.main(String["--reset"])
             @test !isdir(invalid_checkpoint_dir)
+        end
+
+        mktempdir() do tmpdir
+            invalid_training_checkpoint_dir = joinpath(tmpdir, "invalid-training-checkpoints")
+            train_module.CHECKPOINT_DIR = invalid_training_checkpoint_dir
+            train_module.BEST_PROMOTION_GAMES = 2
+            train_module.REPLAY_RECENT_FRACTION = 0.5
+            train_module.REPLAY_RECENT_WINDOW = 0
+            @test_throws ArgumentError train_module.main(String["--reset"])
+            @test !isdir(invalid_training_checkpoint_dir)
+            train_module.REPLAY_RECENT_WINDOW = 4096
         end
 
         mktempdir() do tmpdir

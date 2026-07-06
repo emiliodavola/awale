@@ -103,7 +103,9 @@ function run_training_iteration(
     n_games::Int=5,
     sims::Int=100,
     batch_size::Int=64,
-    updates_per_iteration::Int=32,
+    updates_per_iteration::Int=16,
+    replay_recent_fraction::Float64=0.5,
+    replay_recent_window::Int=4096,
     temperature_moves::Int=20,
     rng=Random.default_rng(),
 )
@@ -118,7 +120,13 @@ function run_training_iteration(
 
     losses = Float32[]
     for _ in 1:updates_per_iteration
-        batch = sample_batch(replay_buffer, batch_size, rng)
+        batch = sample_batch(
+            replay_buffer,
+            batch_size,
+            rng;
+            recent_fraction=replay_recent_fraction,
+            recent_window=replay_recent_window,
+        )
         isempty(batch) && break
 
         states = [experience.state for experience in batch]

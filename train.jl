@@ -24,7 +24,9 @@ LEARNING_RATE = Float32(training_cfg["learning_rate"])
 CHECKPOINT_DIR = String(training_cfg["checkpoint_dir"])
 REPLAY_BUFFER_CAPACITY = Int(get(training_cfg, "replay_buffer_capacity", 50_000))
 BATCH_SIZE = Int(get(training_cfg, "batch_size", 128))
-UPDATES_PER_ITERATION = Int(get(training_cfg, "updates_per_iteration", 64))
+UPDATES_PER_ITERATION = Int(get(training_cfg, "updates_per_iteration", 16))
+REPLAY_RECENT_FRACTION = Float64(get(training_cfg, "replay_recent_fraction", 0.5))
+REPLAY_RECENT_WINDOW = Int(get(training_cfg, "replay_recent_window", 4096))
 TEMPERATURE_MOVES = Int(get(training_cfg, "temperature_moves", 20))
 CHECKPOINT_EVERY = Int(get(training_cfg, "checkpoint_every", 25))
 LAST_CHECKPOINT_PATH = String(get(training_cfg, "last_checkpoint_path", joinpath(CHECKPOINT_DIR, "model_last.bin")))
@@ -67,6 +69,14 @@ end
 function decided_win_rate(results)::Float64
     decided = results.wins + results.losses
     return decided == 0 ? 50.0 : (results.wins / decided) * 100.0
+end
+
+function validate_training_config()
+    UPDATES_PER_ITERATION > 0 || throw(ArgumentError("training.updates_per_iteration must be > 0"))
+    0.0 <= REPLAY_RECENT_FRACTION <= 1.0 || throw(ArgumentError("training.replay_recent_fraction must be between 0 and 1"))
+    REPLAY_RECENT_WINDOW >= 0 || throw(ArgumentError("training.replay_recent_window must be >= 0"))
+    REPLAY_RECENT_FRACTION == 0.0 || REPLAY_RECENT_WINDOW > 0 || throw(ArgumentError("training.replay_recent_window must be > 0 when replay_recent_fraction > 0"))
+    return nothing
 end
 
 function validate_selection_config(games::Int, opening_plies, openings_per_ply::Int)
@@ -198,6 +208,7 @@ end
 function main(args::Vector{String}=Base.ARGS)
     println("--- Iniciando Entrenamiento y Evaluación de Awale ---")
 
+    validate_training_config()
     validate_selection_config(BEST_PROMOTION_GAMES, BEST_OPENING_PLIES, BEST_OPENINGS_PER_PLY)
 
     if !isdir(CHECKPOINT_DIR)
@@ -264,6 +275,8 @@ function main(args::Vector{String}=Base.ARGS)
                 sims=SIMS_PER_MOVE,
                 batch_size=BATCH_SIZE,
                 updates_per_iteration=UPDATES_PER_ITERATION,
+                replay_recent_fraction=REPLAY_RECENT_FRACTION,
+                replay_recent_window=REPLAY_RECENT_WINDOW,
                 temperature_moves=TEMPERATURE_MOVES,
                 rng=rng,
             )
