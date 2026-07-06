@@ -1,5 +1,6 @@
 using Flux
-include("src/Awale.jl")
+const ROOT_DIR = @__DIR__
+include(joinpath(ROOT_DIR, "src", "Awale.jl"))
 using .Awale
 using .Awale.Training: run_training_iteration
 using .Awale.Model: save_model, load_model
@@ -10,7 +11,7 @@ using Random
 using TOML
 using Dates
 
-config = TOML.parsefile("config.toml")
+config = TOML.parsefile(joinpath(ROOT_DIR, "config.toml"))
 training_cfg = config["training"]
 eval_cfg = config["evaluation"]
 mcts_cfg = config["mcts"]
@@ -28,7 +29,7 @@ CHECKPOINT_EVERY = Int(get(training_cfg, "checkpoint_every", 25))
 LAST_CHECKPOINT_PATH = String(get(training_cfg, "last_checkpoint_path", joinpath(CHECKPOINT_DIR, "model_last.bin")))
 BEST_CHECKPOINT_PATH = String(get(training_cfg, "best_checkpoint_path", joinpath(CHECKPOINT_DIR, "model_best.bin")))
 STATE_PATH = String(get(training_cfg, "state_path", joinpath(CHECKPOINT_DIR, "training_state.toml")))
-MODEL_CONFIG_PATH = String(get(training_cfg, "model_config_path", "src/Awale/config.toml"))
+MODEL_CONFIG_PATH = abspath(ROOT_DIR, String(get(training_cfg, "model_config_path", joinpath("src", "Awale", "config.toml"))))
 EVAL_GAMES = Int(eval_cfg["eval_games"])
 SIMS_PER_EVAL = Int(eval_cfg["sims_per_eval"])
 CHECKPOINT_PATH = String(eval_cfg["checkpoint_path"])
@@ -58,7 +59,7 @@ function save_run_config(log_dir::String)
     println("Registrando configuración en: $log_file")
 
     try
-        data = read("config.toml", String)
+        data = read(joinpath(ROOT_DIR, "config.toml"), String)
         write(log_file, data)
     catch err
         println("Error al copiar configuración: $err")

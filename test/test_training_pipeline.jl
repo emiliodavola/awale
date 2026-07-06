@@ -222,10 +222,16 @@ end
         Core.eval(play_module, :(include(path) = Base.include($(play_module), path)))
         Core.eval(arena_module, :(include(path) = Base.include($(arena_module), path)))
 
-        Base.include(train_module, joinpath(@__DIR__, "..", "train.jl"))
-        Base.include(eval_module, joinpath(@__DIR__, "..", "baseline_eval.jl"))
-        Base.include(play_module, joinpath(@__DIR__, "..", "play.jl"))
-        Base.include(arena_module, joinpath(@__DIR__, "..", "checkpoint_arena.jl"))
+        mktempdir() do tmpdir
+            cd(tmpdir) do
+                Base.include(train_module, joinpath(@__DIR__, "..", "train.jl"))
+                Base.include(eval_module, joinpath(@__DIR__, "..", "baseline_eval.jl"))
+                Base.include(play_module, joinpath(@__DIR__, "..", "play.jl"))
+                Base.include(arena_module, joinpath(@__DIR__, "..", "checkpoint_arena.jl"))
+                model = Awale.create_model()
+                @test length(Awale.predict(model, Awale.initial_state())[1]) == 6
+            end
+        end
 
         @test isdefined(train_module, :main)
         @test isdefined(eval_module, :main)

@@ -1,4 +1,5 @@
-include("src/Awale.jl")
+const ROOT_DIR = @__DIR__
+include(joinpath(ROOT_DIR, "src", "Awale.jl"))
 using .Awale
 using .Awale.Evaluation: ModelAgent, result_from_terminal_state
 using .Awale.MCTS: MCTSSearch
@@ -6,7 +7,7 @@ using .Awale.Model: load_model
 using Random
 using TOML
 
-config = TOML.parsefile("config.toml")
+config = TOML.parsefile(joinpath(ROOT_DIR, "config.toml"))
 training_cfg = config["training"]
 mcts_cfg = config["mcts"]
 

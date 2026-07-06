@@ -1,12 +1,11 @@
-using Flux
-include("src/Awale.jl")
+include(joinpath(@__DIR__, "src", "Awale.jl"))
 using .Awale
 using .Awale.Evaluation: RandomAgent, ModelAgent, HeuristicAgent, evaluate_agents
 using .Awale.MCTS: MCTSSearch
 using .Awale.Model: create_model, load_model
 using TOML
 
-config = TOML.parsefile("config.toml")
+config = TOML.parsefile(joinpath(@__DIR__, "config.toml"))
 eval_cfg = config["evaluation"]
 mcts_cfg = config["mcts"]
 

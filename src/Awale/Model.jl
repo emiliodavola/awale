@@ -17,7 +17,7 @@ end
 # Use @layer for Flux >= 0.15 to avoid deprecation warnings and ensure parameter tracking
 Flux.@layer AwaleModel
 
-function create_model(config_path::String="src/Awale/config.toml")
+function create_model(config_path::String=joinpath(@__DIR__, "config.toml"))
     config = TOML.parsefile(config_path)
     model_cfg = config["model"]
 

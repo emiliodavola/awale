@@ -1,5 +1,4 @@
-using Flux
-include("src/Awale.jl")
+include(joinpath(@__DIR__, "src", "Awale.jl"))
 using .Awale
 using .Awale.State: GameState, initial_state, GameConfig
 using .Awale.Env: is_terminal, transition
@@ -11,7 +10,7 @@ using Random
 using TOML
 using Dates
 
-config = TOML.parsefile("config.toml")
+config = TOML.parsefile(joinpath(@__DIR__, "config.toml"))
 eval_cfg = config["evaluation"]
 mcts_cfg = config["mcts"]
 

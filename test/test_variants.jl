@@ -1,41 +1,34 @@
 using Test
-# Use absolute paths relative to this script
-root = joinpath(@__DIR__, "..")
-include(joinpath(root, "src/Awale/State.jl"))
-include(joinpath(root, "src/Awale/Env.jl"))
+using StaticArrays: SVector
+using .Awale
 
-function test_forced_feeding()
-    println("Testing Forced Feeding...")
-    cfg = State.GameConfig(forced_feeding=:require_feed)
-    board = (4, 4, 4, 4, 4, 4, 0, 0, 0, 0, 0, 0)
-    s = State.GameState(board, Int8(1), (0, 0), 0, cfg)
-    actions = Env.legal_actions(s)
-    @test 6 in actions
-    
-    board_limited = (1, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0)
-    s_limited = State.GameState(board_limited, Int8(1), (0, 0), 0, cfg)
-    actions_limited = Env.legal_actions(s_limited)
-    @test 6 in actions_limited
-    @test !(1 in actions_limited)
+function variant_state(board::NTuple{12,Int}, config::Awale.GameConfig; to_move::Int8=Int8(1), captured=(UInt8(0), UInt8(0)))
+    board_vec = SVector{12,UInt8}(UInt8.(board))
+    return Awale.GameState(board_vec, to_move, captured, UInt64(0), config, Set{UInt64}())
 end
 
-function test_starvation_prevention()
-    println("Testing Starvation Prevention...")
-    cfg = State.GameConfig(starvation=:prevent_starvation)
-    board = (4, 0, 0, 0, 0, 4, 1, 0, 0, 0, 0, 0)
-    s = State.GameState(board, Int8(1), (0, 0), 0, cfg)
-    @test 6 in Env.legal_actions(s)
-    
-    board_danger = (0, 0, 0, 0, 10, 0, 1, 0, 0, 0, 0, 0)
-    s_danger = State.GameState(board_danger, Int8(1), (0, 0), 0, cfg)
-    actions_danger = Env.legal_actions(s_danger)
-    @test !(5 in actions_danger)
-end
+@testset "rule variants" begin
+    @testset "forced feeding requires a feeding move when one exists" begin
+        cfg = Awale.GameConfig(forced_feeding=:require_feed)
+        state = variant_state((4, 4, 4, 4, 4, 4, 0, 0, 0, 0, 0, 0), cfg)
+        actions = Awale.legal_actions(state)
+        @test 6 in actions
 
-try
-    test_forced_feeding()
-    test_starvation_prevention()
-    println("All variant tests passed!")
-catch e
-    rethrow(e)
+        limited_state = variant_state((1, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0), cfg)
+        limited_actions = Awale.legal_actions(limited_state)
+        @test 6 in limited_actions
+        @test !(1 in limited_actions)
+    end
+
+    @testset "starvation prevention filters starving moves when alternatives exist" begin
+        cfg = Awale.GameConfig(starvation=:prevent_starvation)
+        safe_state = variant_state((4, 0, 0, 0, 0, 4, 1, 0, 0, 0, 0, 0), cfg)
+        @test 6 in Awale.legal_actions(safe_state)
+
+        filtered_state = variant_state((1, 0, 4, 3, 0, 0, 0, 0, 0, 0, 0, 0), cfg)
+        filtered_actions = Awale.legal_actions(filtered_state)
+        @test !(1 in filtered_actions)
+        @test 3 in filtered_actions
+        @test 4 in filtered_actions
+    end
 end
