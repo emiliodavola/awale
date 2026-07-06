@@ -109,14 +109,18 @@ function run_training_iteration(
     temperature_moves::Int=20,
     rng=Random.default_rng(),
 )
+    recent_pct = Int(round(replay_recent_fraction * 100))
+    history_pct = 100 - recent_pct
+
     for game_idx in 1:n_games
-        print("  Game $game_idx/$n_games... ")
+        print("\r  Self-play: $game_idx/$n_games")
+        flush(stdout)
         game_data = collect_selfplay_data(mcts, GameConfig(), sims, temperature_moves, rng)
         for (state, pi_target, value_target) in game_data
             push_experience!(replay_buffer, Experience(state, pi_target, value_target))
         end
-        println("Done.")
     end
+    println("\r  Self-play: $n_games/$n_games | updates: $updates_per_iteration | replay mix: $(recent_pct)% recent / $(history_pct)% history")
 
     losses = Float32[]
     for _ in 1:updates_per_iteration
