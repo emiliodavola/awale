@@ -392,11 +392,14 @@ end
             touch(joinpath(tmpdir, "model_best.bin"))
             touch(joinpath(tmpdir, "model_final.bin"))
             arena_module.CHECKPOINT_DIR = tmpdir
-            @test arena_module.numeric_checkpoint_labels() == [5, 10, 25, 26, 27]
-            @test arena_module.available_matchups() == [(5, 10), (10, 25), (25, 26), (26, 27)]
-            @test arena_module.latest_anchor_matchups() == [(27, 26), (27, 25), (27, 10)]
-            @test arena_module.latest_anchor_matchups(2) == [(27, 26), (27, 25)]
-            @test arena_module.operational_alias_matchups() == [("best", 27), ("last", 27), ("final", 27), ("best", "last"), ("best", "final"), ("final", "last")]
+            labels = arena_module.existing_checkpoint_labels()
+            numeric_labels = arena_module.numeric_checkpoint_labels(labels)
+            @test numeric_labels == [5, 10, 25, 26, 27]
+            @test arena_module.available_matchups(numeric_labels) == [(5, 10), (10, 25), (25, 26), (26, 27)]
+            @test arena_module.latest_anchor_matchups(numeric_labels) == [(27, 26), (27, 25), (27, 10)]
+            @test arena_module.latest_anchor_matchups(numeric_labels, 2) == [(27, 26), (27, 25)]
+            @test arena_module.operational_alias_matchups(labels, numeric_labels) == [("best", 27), ("last", 27), ("final", 27), ("best", "last"), ("best", "final"), ("final", "last")]
+            @test arena_module.collect_duel_labels([(5, 10), (10, 25), ("best", 25)]) == Any[5, 10, 25, "best"]
         end
 
         mktempdir() do tmpdir
@@ -407,6 +410,22 @@ end
             duel_a = arena_module.run_duel(5, 10; sims=0, games=2, openings=openings)
             duel_b = arena_module.run_duel(5, 10; sims=0, games=2, openings=openings)
             @test duel_a == duel_b
+        end
+
+        mktempdir() do tmpdir
+            arena_module.CHECKPOINT_DIR = tmpdir
+            Random.seed!(1)
+            arena_module.Awale.Model.save_model(arena_module.Awale.create_model(), joinpath(tmpdir, "model_best.bin"))
+            arena_module.Awale.Model.save_model(arena_module.Awale.create_model(), joinpath(tmpdir, "model_iter_5.bin"))
+            cache = arena_module.build_model_cache(["best", 5])
+            openings = arena_module.generate_opening_suite(plies=[0], seed=321, openings_per_ply=1)
+            rm(joinpath(tmpdir, "model_best.bin"))
+            @test arena_module.run_duel("best", 5; sims=0, games=2, openings=openings, model_cache=cache) !== nothing
+            @test arena_module.run_duel("best", 5; sims=0, games=2, openings=openings) === nothing
+            arena_module.Awale.Model.save_model(arena_module.Awale.create_model(), joinpath(tmpdir, "model_best.bin"))
+            partial_cache = arena_module.build_model_cache([5])
+            @test arena_module.run_duel("best", 5; sims=0, games=2, openings=openings, model_cache=partial_cache) === nothing
+            @test arena_module.run_duel("best", 5; sims=0, games=2, openings=openings) !== nothing
         end
 
         mktempdir() do tmpdir
@@ -439,12 +458,19 @@ end
             arena_module.DEFAULT_SIMS = [0]
             output = mktemp() do path, io
                 redirect_stdout(io) do
-                    arena_module.main()
+                    arena_module.main(post_freeze_callback=snapshot -> begin
+                        rm(joinpath(tmpdir, "model_best.bin"))
+                        arena_module.Awale.Model.save_model(arena_module.Awale.create_model(), joinpath(tmpdir, "model_iter_200.bin"))
+                        @test snapshot.numeric_labels == [100, 125, 150, 175]
+                        @test snapshot.planned_labels == Any[100, 125, 150, 175, "best", "last", "final"]
+                    end)
                 end
                 flush(io)
                 close(io)
                 read(path, String)
             end
+            @test occursin("Frozen labels for this run:", output)
+            @test occursin("Planned labels for this run:", output)
             @test occursin("Latest checkpoint vs prior anchors (last 3)", output)
             @test occursin("iter_175       | iter_150", output)
             @test occursin("iter_175       | iter_125", output)
@@ -452,6 +478,7 @@ end
             @test occursin("best           | iter_175", output)
             @test occursin("last           | iter_175", output)
             @test occursin("final          | iter_175", output)
+            @test !occursin("iter_200", output)
         end
         arena_module.CHECKPOINT_DIR = original_checkpoint_dir
     end

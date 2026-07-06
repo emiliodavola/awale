@@ -65,12 +65,11 @@ function existing_checkpoint_labels()
     return labels
 end
 
-function numeric_checkpoint_labels()
-    return sort([label for label in existing_checkpoint_labels() if label isa Int])
+function numeric_checkpoint_labels(labels=existing_checkpoint_labels())
+    return sort([label for label in labels if label isa Int])
 end
 
-function available_matchups()
-    numeric_labels = numeric_checkpoint_labels()
+function available_matchups(numeric_labels=numeric_checkpoint_labels())
     matchups = Tuple{Int, Int}[]
 
     for idx in 1:(length(numeric_labels) - 1)
@@ -82,8 +81,7 @@ end
 
 LATEST_ANCHOR_COUNT = 3
 
-function latest_anchor_matchups(anchor_count::Int=LATEST_ANCHOR_COUNT)
-    numeric_labels = numeric_checkpoint_labels()
+function latest_anchor_matchups(numeric_labels=numeric_checkpoint_labels(), anchor_count::Int=LATEST_ANCHOR_COUNT)
     length(numeric_labels) <= 1 && return Tuple{Int, Int}[]
 
     latest = numeric_labels[end]
@@ -92,30 +90,29 @@ function latest_anchor_matchups(anchor_count::Int=LATEST_ANCHOR_COUNT)
     return [(latest, anchor) for anchor in reverse(anchors)]
 end
 
-function operational_alias_matchups()
-    numeric_labels = numeric_checkpoint_labels()
+function operational_alias_matchups(labels=existing_checkpoint_labels(), numeric_labels=numeric_checkpoint_labels(labels))
     isempty(numeric_labels) && return Tuple{Any, Any}[]
 
     latest = numeric_labels[end]
-    labels = Set(existing_checkpoint_labels())
+    label_set = Set(labels)
     matchups = Tuple{Any, Any}[]
 
-    if "best" in labels
+    if "best" in label_set
         push!(matchups, ("best", latest))
     end
-    if "last" in labels
+    if "last" in label_set
         push!(matchups, ("last", latest))
     end
-    if "final" in labels
+    if "final" in label_set
         push!(matchups, ("final", latest))
     end
-    if "best" in labels && "last" in labels
+    if "best" in label_set && "last" in label_set
         push!(matchups, ("best", "last"))
     end
-    if "best" in labels && "final" in labels
+    if "best" in label_set && "final" in label_set
         push!(matchups, ("best", "final"))
     end
-    if "final" in labels && "last" in labels
+    if "final" in label_set && "last" in label_set
         push!(matchups, ("final", "last"))
     end
 
@@ -162,43 +159,84 @@ end
 
 stable_label_seed(label) = label isa Int ? label : sum(codeunits(String(label)))
 
-function run_duel(label_a, label_b; sims::Int, games::Int, openings=generate_opening_suite(plies=DEFAULT_OPENING_PLIES, openings_per_ply=OPENINGS_PER_PLY, seed=OPENING_SEED))
+function collect_duel_labels(matchups)::Vector{Any}
+    labels = Any[]
+    for (label_a, label_b) in matchups
+        push!(labels, label_a, label_b)
+    end
+    return unique(labels)
+end
+
+function build_model_cache(labels)
+    cache = Dict{Any, Any}()
+    for label in labels
+        path = checkpoint_path(label)
+        isfile(path) || continue
+        cache[label] = load_model(path)
+    end
+    return cache
+end
+
+function resolve_model(label, path::AbstractString, model_cache)
+    if model_cache !== nothing
+        return get(model_cache, label, nothing)
+    end
+    return isfile(path) ? load_model(path) : nothing
+end
+
+function run_duel(label_a, label_b; sims::Int, games::Int, openings=generate_opening_suite(plies=DEFAULT_OPENING_PLIES, openings_per_ply=OPENINGS_PER_PLY, seed=OPENING_SEED), model_cache=nothing)
     path_a = checkpoint_path(label_a)
     path_b = checkpoint_path(label_b)
 
-    if !isfile(path_a) || !isfile(path_b)
+    model_a = resolve_model(label_a, path_a, model_cache)
+    model_b = resolve_model(label_b, path_b, model_cache)
+    if model_a === nothing || model_b === nothing
         return nothing
     end
 
-    model_a = load_model(path_a)
-    model_b = load_model(path_b)
     agent_a = ModelAgent(MCTSSearch(model_a, C_PUCT, Dict{UInt64, Tuple{Float32, Int64}}()), sims)
     agent_b = ModelAgent(MCTSSearch(model_b, C_PUCT, Dict{UInt64, Tuple{Float32, Int64}}()), sims)
     duel_rng = Random.MersenneTwister(OPENING_SEED + 1000 * sims + 31 * stable_label_seed(label_a) + stable_label_seed(label_b))
     return evaluate_agents_on_openings(agent_a, agent_b, openings, games, duel_rng)
 end
 
-function main()
+function main(; post_freeze_callback=nothing)
     println("--- Awale checkpoint arena ---")
-    matchups = available_matchups()
-    anchor_matchups = latest_anchor_matchups()
-    alias_matchups = operational_alias_matchups()
+    detected_labels = existing_checkpoint_labels()
+    numeric_labels = numeric_checkpoint_labels(detected_labels)
+    matchups = available_matchups(numeric_labels)
+    anchor_matchups = latest_anchor_matchups(numeric_labels, LATEST_ANCHOR_COUNT)
+    alias_matchups = operational_alias_matchups(detected_labels, numeric_labels)
 
     if isempty(matchups) && isempty(anchor_matchups) && isempty(alias_matchups)
         println("No hay suficientes checkpoints compatibles para correr el arena.")
         return
     end
 
+    all_matchups = vcat(matchups, anchor_matchups, alias_matchups)
+    planned_labels = collect_duel_labels(all_matchups)
+    model_cache = build_model_cache(planned_labels)
+    post_freeze_callback === nothing || post_freeze_callback((;
+        detected_labels=copy(detected_labels),
+        numeric_labels=copy(numeric_labels),
+        matchups=copy(matchups),
+        anchor_matchups=copy(anchor_matchups),
+        alias_matchups=copy(alias_matchups),
+        planned_labels=copy(planned_labels),
+        model_cache=model_cache,
+    ))
     openings = generate_opening_suite(plies=DEFAULT_OPENING_PLIES, openings_per_ply=OPENINGS_PER_PLY, seed=OPENING_SEED)
-    println("Checkpoints detectados: $(join(checkpoint_label.(existing_checkpoint_labels()), ", "))")
+    println("Checkpoints detectados: $(join(checkpoint_label.(detected_labels), ", "))")
     println("Opening suite: $(length(openings)) posiciones reproducibles (plies=$(DEFAULT_OPENING_PLIES), openings_per_ply=$(OPENINGS_PER_PLY))")
+    println("Frozen labels for this run: $(join(sort!(string.(keys(model_cache))), ", "))")
+    println("Planned labels for this run: $(join(sort!(string.(planned_labels)), ", "))")
 
     for sims in DEFAULT_SIMS
         println("\nSims per side: $sims")
         println(format_header())
         println(repeat("-", sum(values(TABLE_WIDTHS)) + 3 * 6))
         for (label_a, label_b) in matchups
-            results = run_duel(label_a, label_b; sims=sims, games=DEFAULT_GAMES, openings=openings)
+            results = run_duel(label_a, label_b; sims=sims, games=DEFAULT_GAMES, openings=openings, model_cache=model_cache)
             if results === nothing
                 println("$(checkpoint_label(label_a)) vs $(checkpoint_label(label_b)) => skipped (missing checkpoint)")
             else
@@ -211,7 +249,7 @@ function main()
             println(format_header())
             println(repeat("-", sum(values(TABLE_WIDTHS)) + 3 * 6))
             for (label_a, label_b) in anchor_matchups
-                results = run_duel(label_a, label_b; sims=sims, games=DEFAULT_GAMES, openings=openings)
+                results = run_duel(label_a, label_b; sims=sims, games=DEFAULT_GAMES, openings=openings, model_cache=model_cache)
                 if results === nothing
                     println("$(checkpoint_label(label_a)) vs $(checkpoint_label(label_b)) => skipped (missing checkpoint)")
                 else
@@ -225,7 +263,7 @@ function main()
             println(format_header())
             println(repeat("-", sum(values(TABLE_WIDTHS)) + 3 * 6))
             for (label_a, label_b) in alias_matchups
-                results = run_duel(label_a, label_b; sims=sims, games=DEFAULT_GAMES, openings=openings)
+                results = run_duel(label_a, label_b; sims=sims, games=DEFAULT_GAMES, openings=openings, model_cache=model_cache)
                 if results === nothing
                     println("$(checkpoint_label(label_a)) vs $(checkpoint_label(label_b)) => skipped (missing checkpoint)")
                 else
