@@ -17,7 +17,7 @@ El sistema usa `config.toml` como configuración local de runtime para entrenami
 - `train.jl` — continúa o ejecuta entrenamiento y actualiza checkpoints.
 - `baseline_eval.jl` — evalúa un checkpoint contra `RandomAgent` y `HeuristicAgent`.
 - `checkpoint_arena.jl` — compara checkpoints entre sí con `0`, `50` y `200` simulaciones.
-- `play.jl` — corre partidas de exhibición con logs de tablero.
+- `play.jl` — corre una única partida de exhibición con logs de tablero y agentes configurables por CLI.
 - `scripts/benchmarks.jl` — microbenchmarks de hot paths (`encode_state`, `select_puct`, `backup`).
 
 ## Hoja de ruta experimental
@@ -102,9 +102,18 @@ Usalo para responder si hay progreso real entre checkpoints de la misma pipeline
 
 ### 6. Partidas de exhibición
 
+`play.jl` está pensado para una sola partida visible en terminal. Permite elegir ambos agentes por línea de comando: `human`, `best`, `last`, `final` o un path explícito a un checkpoint. También acepta `--sims` para controlar cuántas simulaciones usa cada agente IA y `--max-turns` para limitar la duración de la partida.
+
+Ejemplos:
+
 ```powershell
-julia --project=. .\play.jl
+julia --project=. .\play.jl --agent1 best --agent2 human
+julia --project=. .\play.jl --agent1 best --agent2 final
+julia --project=. .\play.jl --agent1 checkpoints\model_best.bin --agent2 human
+julia --project=. .\play.jl --agent1 best --agent2 final --sims 200 --max-turns 120
 ```
+
+La interfaz muestra el humano abajo, la fila superior en orden inverso para respetar la siembra antihoraria, las capturadas de ambos jugadores y un banner claro por turno.
 
 ### 7. Microbenchmarks
 

@@ -1,93 +1,293 @@
 include(joinpath(@__DIR__, "src", "Awale.jl"))
+
 using .Awale
 using .Awale.State: GameState, initial_state, GameConfig
-using .Awale.Env: is_terminal, transition
-using .Awale.Training: run_training_iteration
-using .Awale.Model: create_model, save_model, load_model
-using .Awale.Evaluation: RandomAgent, HeuristicAgent, ModelAgent, play_match, select_action
+using .Awale.Env: is_terminal, transition, legal_actions
+using .Awale.Model: load_model
+using .Awale.Evaluation: ModelAgent, result_from_terminal_state, select_action
 using .Awale.MCTS: MCTSSearch
-using Random
 using TOML
-using Dates
 
-config = TOML.parsefile(joinpath(@__DIR__, "config.toml"))
+const ROOT_DIR = @__DIR__
+config = TOML.parsefile(joinpath(ROOT_DIR, "config.toml"))
 training_cfg = config["training"]
 eval_cfg = config["evaluation"]
 mcts_cfg = config["mcts"]
 
-EVAL_GAMES = Int(eval_cfg["eval_games"])
-SIMS_PER_EVAL = Int(eval_cfg["sims_per_eval"])
-CHECKPOINT_PATH = String(eval_cfg["checkpoint_path"])
-MAX_TURNS = Int(training_cfg["max_turns"])
-C_PUCT = Float32(mcts_cfg["c_puct"])
+const DEFAULT_AGENT1_SPEC = "best"
+const DEFAULT_AGENT2_SPEC = "human"
+const DEFAULT_SIMS = Int(get(eval_cfg, "sims_per_eval", 100))
+const MAX_TURNS = Int(training_cfg["max_turns"])
+const C_PUCT = Float32(mcts_cfg["c_puct"])
 
-function print_board(s::GameState)
-    board_str = join(map(x -> string(x), s.board[1:6]), " ") * " | " * join(map(x -> string(x), s.board[7:12]), " ")
-    println("  Board: [$board_str]")
-    println("  Captured: P1: $(s.captured[1]), P2: $(s.captured[2])")
-    println("  To move: Player $(s.to_move)")
-    println(repeat("-", 30))
+struct HumanAgent end
+
+function resolve_path(path::AbstractString)::String
+    return isabspath(path) ? String(path) : joinpath(ROOT_DIR, String(path))
 end
 
-function play_match_with_logs(agent_p1, agent_p2, config::GameConfig=GameConfig(), max_turns::Int=MAX_TURNS)
-    s = initial_state(config)
-    turn = 1
-    turns_played = 0
-
-    println("--- Comienzo del Partido ---")
-    print_board(s)
-
-    while !is_terminal(s) && turns_played < max_turns
-        current_agent = turn == 1 ? agent_p1 : agent_p2
-        agent_name = turn == 1 ? "Player 1" : "Player 2"
-
-        action = select_action(current_agent, s)
-        s_prev = s
-        s = transition(s, action)
-        turns_played += 1
-
-        if s.captured != s_prev.captured || turns_played % 5 == 0
-            println("  $agent_name: Acción $action")
-            print_board(s)
-        end
-
-        turn = turn == 1 ? 2 : 1
+function resolve_checkpoint_path(spec::AbstractString)::String
+    normalized = lowercase(strip(spec))
+    if normalized == "best"
+        return resolve_path(String(get(training_cfg, "best_checkpoint_path", joinpath("checkpoints", "model_best.bin"))))
+    elseif normalized == "last"
+        return resolve_path(String(get(training_cfg, "last_checkpoint_path", joinpath("checkpoints", "model_last.bin"))))
+    elseif normalized == "final"
+        return resolve_path(String(get(eval_cfg, "checkpoint_path", joinpath("checkpoints", "model_final.bin"))))
     end
 
-    result = Awale.Evaluation.result_from_terminal_state(s)
+    return resolve_path(spec)
+end
 
-    println("--- Fin del Partido ---")
+function agent_label(spec::AbstractString)::String
+    normalized = lowercase(strip(spec))
+    if normalized == "human"
+        return "human"
+    elseif normalized in ("best", "last", "final")
+        return normalized
+    end
+
+    return basename(spec)
+end
+
+function format_cell(label::Int, seeds)::String
+    return "[" * lpad(string(label), 2) * ":" * lpad(string(Int(seeds)), 2) * "]"
+end
+
+function print_legend(bottom_player::Int)
+    top_player = bottom_player == 1 ? 2 : 1
+    println("Leyenda: P$bottom_player abajo, P$top_player arriba. La siembra es antihoraria.")
+    println("         La fila superior se muestra en orden inverso para seguir el recorrido de las semillas.")
+end
+
+function print_board(s::GameState; bottom_player::Int=1)
+    top_player = bottom_player == 1 ? 2 : 1
+
+    if bottom_player == 1
+        top_labels = 12:-1:7
+        top_row = s.board[12:-1:7]
+        bottom_labels = 1:6
+        bottom_row = s.board[1:6]
+    else
+        top_labels = 6:-1:1
+        top_row = s.board[6:-1:1]
+        bottom_labels = 1:6
+        bottom_row = s.board[7:12]
+    end
+
+    println()
+    println("                 P$(top_player) capturadas: $(Int(s.captured[top_player]))")
+    println("      " * join((format_cell(label, seeds) for (label, seeds) in zip(top_labels, top_row)), " "))
+    println("      " * join((format_cell(label, seeds) for (label, seeds) in zip(bottom_labels, bottom_row)), " "))
+    println("                 P$(bottom_player) capturadas: $(Int(s.captured[bottom_player]))")
+    println("                 Turno: P$(Int(s.to_move))")
+end
+
+function prompt_human_action(s::GameState)
+    legal = legal_actions(s)
+    println("Jugadas legales: $(join(legal, ", "))")
+
+    while true
+        print("Elegí una casilla [1-6], 'h' para ayuda o 'q' para salir: ")
+        flush(stdout)
+        raw = read_human_choice()
+
+        if isempty(raw) && eof(stdin)
+            throw(InterruptException())
+        end
+
+        if raw in ("q", "quit", "exit")
+            throw(InterruptException())
+        end
+
+        if raw in ("h", "help", "?")
+            println("Ingresá un número entre 1 y 6 que esté en las jugadas legales.")
+            println("'q' abandona la partida.")
+            continue
+        end
+
+        action = try
+            parse(Int, raw)
+        catch
+            0
+        end
+
+        if action in legal
+            return action
+        end
+
+        println("[!] Jugada inválida. Probá de nuevo.")
+    end
+end
+
+function resolve_agent(spec::AbstractString, sims::Int)
+    normalized = lowercase(strip(spec))
+    if normalized == "human"
+        return HumanAgent(), "human"
+    end
+
+    path = resolve_checkpoint_path(spec)
+    isfile(path) || throw(ArgumentError("No se encontró el checkpoint para '$spec' en '$path'"))
+
+    model = load_model(path)
+    mcts = MCTSSearch(model, C_PUCT, Dict{UInt64, Tuple{Float32, Int64}}())
+    return ModelAgent(mcts, sims), agent_label(spec)
+end
+
+function final_result(s::GameState)::Int
+    if is_terminal(s)
+        return result_from_terminal_state(s)
+    end
+
+    if s.captured[1] > s.captured[2]
+        return 1
+    elseif s.captured[2] > s.captured[1]
+        return -1
+    end
+
+    return 0
+end
+
+function print_help()
+    println("Awale terminal play")
+    println()
+    println("Usage:")
+    println("  julia --project=. play.jl [--agent1 SPEC] [--agent2 SPEC] [--sims N] [--max-turns N]")
+    println()
+    println("Agent specs:")
+    println("  human   - interactive terminal player")
+    println("  best    - training best checkpoint")
+    println("  last    - last checkpoint")
+    println("  final   - final evaluation checkpoint")
+    println("  path    - explicit checkpoint path")
+    println()
+    println("Examples:")
+    println("  julia --project=. play.jl --agent1 best --agent2 human")
+    println("  julia --project=. play.jl --agent1 best --agent2 final")
+    println("  julia --project=. play.jl --agent1 checkpoints/model_best.bin --agent2 human")
+end
+
+function parse_args(args::Vector{String})
+    opts = Dict{String, String}("agent1" => DEFAULT_AGENT1_SPEC, "agent2" => DEFAULT_AGENT2_SPEC, "sims" => string(DEFAULT_SIMS), "max-turns" => string(MAX_TURNS))
+    i = 1
+
+    while i <= length(args)
+        arg = args[i]
+        if arg in ("-h", "--help")
+            return nothing
+        elseif arg in ("--agent1", "--agent2", "--sims", "--max-turns")
+            i == length(args) && throw(ArgumentError("Falta valor para $arg"))
+            opts[replace(arg, "--" => "")] = args[i + 1]
+            i += 2
+        else
+            throw(ArgumentError("Argumento desconocido: $arg"))
+        end
+    end
+
+    return opts
+end
+
+function parse_int_option(name::AbstractString, value::AbstractString)::Int
+    parsed = tryparse(Int, strip(value))
+    parsed === nothing && throw(ArgumentError("$name debe ser un entero, recibí: '$value'"))
+    return parsed
+end
+
+function print_turn_banner(turn_no::Int, player::Int, label::String)
+    println()
+    println("=== TURNO $turn_no | P$player | agente: $label ===")
+end
+
+function read_human_choice()::String
+    try
+        return lowercase(strip(readline()))
+    catch err
+        if err isa EOFError
+            throw(InterruptException())
+        end
+        rethrow()
+    end
+end
+
+function print_turn_action(player::Int, action::Int)
+    println("P$player mueve desde la casilla $action")
+    println("Jugada: $action")
+end
+
+function print_turn_separator()
+    println(repeat("-", 40))
+end
+
+function play_match_with_logs(agent1, label1::String, agent2, label2::String; config::GameConfig=GameConfig(), max_turns::Int=MAX_TURNS, bottom_player::Int=1)
+    state = initial_state(config)
+    turns_played = 0
+
+    println("--- Partida de exhibición ---")
+    println("=== ESTADO INICIAL ===")
+    print_legend(bottom_player)
+    print_board(state; bottom_player=bottom_player)
+    print_turn_separator()
+
+    try
+        while !is_terminal(state) && turns_played < max_turns
+            current_player = Int(state.to_move)
+            current_agent = current_player == 1 ? agent1 : agent2
+            current_label = current_player == 1 ? label1 : label2
+            turn_no = turns_played + 1
+
+            print_turn_banner(turn_no, current_player, current_label)
+            action = current_agent isa HumanAgent ? prompt_human_action(state) : select_action(current_agent, state)
+            print_turn_action(current_player, action)
+
+            state = transition(state, action)
+            turns_played += 1
+            print_board(state; bottom_player=bottom_player)
+            print_turn_separator()
+        end
+    catch err
+        if err isa InterruptException
+            println()
+            println("[!] Partida abortada por el usuario.")
+            return nothing
+        end
+        rethrow()
+    end
+
+    result = final_result(state)
+    println()
+    println("--- Fin de la partida ---")
     if result == 1
-        println("🏆 GANADOR: Player 1")
+        println("🏆 GANADOR: P1")
     elseif result == -1
-        println("🏆 GANADOR: Player 2")
+        println("🏆 GANADOR: P2")
     else
         println("🤝 RESULTADO: Empate")
     end
-    println("  Duración: $turns_played turnos")
+    println("Duración: $turns_played turnos")
+
+    if turns_played >= max_turns && !is_terminal(state)
+        println("[WARN] La partida terminó por max_turns antes del cierre natural.")
+    end
+
+    return result
 end
 
 function main(args::Vector{String}=Base.ARGS)
+    opts = parse_args(args)
+    opts === nothing && return print_help()
+
     println("--- Visualizador de Juego de Awale ---")
 
-    if isfile(CHECKPOINT_PATH)
-        println("Cargando modelo entrenado desde: $CHECKPOINT_PATH")
-        model = load_model(CHECKPOINT_PATH)
-    else
-        println("No se encontró modelo final. Usando modelo aleatorio.")
-        model = create_model()
-    end
+    sims = parse_int_option("--sims", opts["sims"])
+    max_turns = parse_int_option("--max-turns", opts["max-turns"])
 
-    mcts = MCTSSearch(model, C_PUCT, Dict{UInt64, Tuple{Float32, Int64}}())
-    agent_model = ModelAgent(mcts, SIMS_PER_EVAL)
-    agent_heuristic = HeuristicAgent()
-    agent_random = RandomAgent()
+    agent1, label1 = resolve_agent(opts["agent1"], sims)
+    agent2, label2 = resolve_agent(opts["agent2"], sims)
 
-    println("\n[EXHIBICIÓN 1] Model vs Heuristic (Greedy)")
-    play_match_with_logs(agent_model, agent_heuristic)
+    bottom_player = agent1 isa HumanAgent ? 1 : agent2 isa HumanAgent ? 2 : 1
+    println("Agentes: P1=$label1 | P2=$label2")
 
-    println("\n[EXHIBICIÓN 2] Model vs Random")
-    play_match_with_logs(agent_model, agent_random)
+    play_match_with_logs(agent1, label1, agent2, label2; max_turns=max_turns, bottom_player=bottom_player)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__

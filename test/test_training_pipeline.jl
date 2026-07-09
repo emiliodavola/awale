@@ -436,6 +436,37 @@ end
         @test isdefined(play_module, :main)
         @test isdefined(arena_module, :main)
         @test arena_module.checkpoint_label(5) == "iter_5"
+        @test play_module.parse_args(["--agent1", "best", "--agent2", "human", "--sims", "200", "--max-turns", "120"]) == Dict("agent1" => "best", "agent2" => "human", "sims" => "200", "max-turns" => "120")
+        @test_throws ArgumentError play_module.parse_int_option("--sims", "foo")
+        @test endswith(play_module.resolve_checkpoint_path("best"), "model_best.bin")
+        @test endswith(play_module.resolve_checkpoint_path("final"), "model_final.bin")
+
+        mktempdir() do tmpdir
+            explicit = joinpath(tmpdir, "Model_Best.bin")
+            touch(explicit)
+            @test play_module.resolve_checkpoint_path(explicit) == explicit
+        end
+
+        log = Pipe()
+        redirect_stdout(log) do
+            play_module.print_legend(1)
+            play_module.print_board(play_module.Awale.initial_state(); bottom_player=1)
+        end
+        close(log.in)
+        output = read(log, String)
+        @test occursin("Leyenda: P1 abajo, P2 arriba. La siembra es antihoraria.", output)
+        @test occursin("[12: 4] [11: 4] [10: 4] [ 9: 4] [ 8: 4] [ 7: 4]", output)
+        @test occursin("[ 1: 4] [ 2: 4] [ 3: 4] [ 4: 4] [ 5: 4] [ 6: 4]", output)
+
+        mktempdir() do tmpdir
+            empty_path = joinpath(tmpdir, "empty.txt")
+            touch(empty_path)
+            open(empty_path, "r") do input
+                @test_throws InterruptException Base.redirect_stdin(input) do
+                    play_module.prompt_human_action(play_module.Awale.initial_state())
+                end
+            end
+        end
 
         openings_a = arena_module.generate_opening_suite(plies=[0, 2, 4, 6], seed=123, openings_per_ply=2)
         openings_b = arena_module.generate_opening_suite(plies=[0, 2, 4, 6], seed=123, openings_per_ply=2)
