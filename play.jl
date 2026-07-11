@@ -5,7 +5,8 @@ using .Awale.State: GameState, initial_state, GameConfig
 using .Awale.Env: is_terminal, transition, legal_actions
 using .Awale.Model: load_model
 using .Awale.Evaluation: ModelAgent, result_from_terminal_state, select_action
-using .Awale.MCTS: MCTSSearch
+using .Awale.MCTS: MCTSSearch, search
+using Random
 using TOML
 
 const ROOT_DIR = @__DIR__
@@ -152,7 +153,7 @@ function print_help()
     println("Awale terminal play")
     println()
     println("Usage:")
-    println("  julia --project=. play.jl [--agent1 SPEC] [--agent2 SPEC] [--sims N] [--max-turns N]")
+    println("  julia --project=. play.jl [--agent1 SPEC] [--agent2 SPEC] [--sims N] [--max-turns N] [--seed N] [--deterministic]")
     println()
     println("Agent specs:")
     println("  human   - interactive terminal player")
@@ -161,10 +162,15 @@ function print_help()
     println("  final   - final evaluation checkpoint")
     println("  path    - explicit checkpoint path")
     println()
+    println("Exhibition mode:")
+    println("  --deterministic  disable stochastic AI move selection")
+    println("  --seed N         reproduce a specific stochastic exhibition")
+    println()
     println("Examples:")
     println("  julia --project=. play.jl --agent1 best --agent2 human")
     println("  julia --project=. play.jl --agent1 best --agent2 final")
-    println("  julia --project=. play.jl --agent1 checkpoints/model_best.bin --agent2 human")
+    println("  julia --project=. play.jl --agent1 best --agent2 final --seed 42")
+    println("  julia --project=. play.jl --agent1 checkpoints/model_best.bin --agent2 human --deterministic")
 end
 
 function parse_args(args::Vector{String})
@@ -175,10 +181,13 @@ function parse_args(args::Vector{String})
         arg = args[i]
         if arg in ("-h", "--help")
             return nothing
-        elseif arg in ("--agent1", "--agent2", "--sims", "--max-turns")
+        elseif arg in ("--agent1", "--agent2", "--sims", "--max-turns", "--seed")
             i == length(args) && throw(ArgumentError("Falta valor para $arg"))
             opts[replace(arg, "--" => "")] = args[i + 1]
             i += 2
+        elseif arg == "--deterministic"
+            opts["deterministic"] = "true"
+            i += 1
         else
             throw(ArgumentError("Argumento desconocido: $arg"))
         end
@@ -191,6 +200,10 @@ function parse_int_option(name::AbstractString, value::AbstractString)::Int
     parsed = tryparse(Int, strip(value))
     parsed === nothing && throw(ArgumentError("$name debe ser un entero, recibí: '$value'"))
     return parsed
+end
+
+function exhibition_stochastic(opts::Dict{String, String})::Bool
+    return !haskey(opts, "deterministic")
 end
 
 function print_turn_banner(turn_no::Int, player::Int, label::String)
@@ -214,15 +227,26 @@ function print_turn_action(player::Int, action::Int)
     println("Jugada: $action")
 end
 
+function select_exhibition_action(agent, state::GameState, rng; stochastic::Bool)
+    if agent isa HumanAgent
+        return prompt_human_action(state)
+    elseif stochastic
+        return search(agent.mcts, state, agent.sims, rng; add_root_noise=true)
+    else
+        return select_action(agent, state, rng)
+    end
+end
+
 function print_turn_separator()
     println(repeat("-", 40))
 end
 
-function play_match_with_logs(agent1, label1::String, agent2, label2::String; config::GameConfig=GameConfig(), max_turns::Int=MAX_TURNS, bottom_player::Int=1)
+function play_match_with_logs(agent1, label1::String, agent2, label2::String; config::GameConfig=GameConfig(), max_turns::Int=MAX_TURNS, bottom_player::Int=1, rng=Random.default_rng(), stochastic::Bool=true)
     state = initial_state(config)
     turns_played = 0
 
     println("--- Partida de exhibición ---")
+    println("Modo: $(stochastic ? "stochastic" : "deterministic")")
     println("=== ESTADO INICIAL ===")
     print_legend(bottom_player)
     print_board(state; bottom_player=bottom_player)
@@ -236,7 +260,7 @@ function play_match_with_logs(agent1, label1::String, agent2, label2::String; co
             turn_no = turns_played + 1
 
             print_turn_banner(turn_no, current_player, current_label)
-            action = current_agent isa HumanAgent ? prompt_human_action(state) : select_action(current_agent, state)
+            action = select_exhibition_action(current_agent, state, rng; stochastic=stochastic)
             print_turn_action(current_player, action)
 
             state = transition(state, action)
@@ -280,6 +304,8 @@ function main(args::Vector{String}=Base.ARGS)
 
     sims = parse_int_option("--sims", opts["sims"])
     max_turns = parse_int_option("--max-turns", opts["max-turns"])
+    stochastic = exhibition_stochastic(opts)
+    exhibition_rng = haskey(opts, "seed") ? Random.MersenneTwister(parse_int_option("--seed", opts["seed"])) : Random.default_rng()
 
     agent1, label1 = resolve_agent(opts["agent1"], sims)
     agent2, label2 = resolve_agent(opts["agent2"], sims)
@@ -287,7 +313,7 @@ function main(args::Vector{String}=Base.ARGS)
     bottom_player = agent1 isa HumanAgent ? 1 : agent2 isa HumanAgent ? 2 : 1
     println("Agentes: P1=$label1 | P2=$label2")
 
-    play_match_with_logs(agent1, label1, agent2, label2; max_turns=max_turns, bottom_player=bottom_player)
+    play_match_with_logs(agent1, label1, agent2, label2; max_turns=max_turns, bottom_player=bottom_player, rng=exhibition_rng, stochastic=stochastic)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
