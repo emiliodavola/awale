@@ -8,6 +8,8 @@ using ..Utils: fnv1a64
 
 export create_model, predict, predict_batch, predict_raw, encode_state, save_model, load_model
 
+const DEFAULT_MODEL_ARCHITECTURE = "mlp"
+
 mutable struct AwaleModel
     shared::Chain
     policy::Chain
@@ -17,21 +19,48 @@ end
 # Use @layer for Flux >= 0.15 to avoid deprecation warnings and ensure parameter tracking
 Flux.@layer AwaleModel
 
-function create_model(config_path::String=joinpath(@__DIR__, "config.toml"))
-    config = TOML.parsefile(config_path)
-    model_cfg = config["model"]
+function model_architecture(model_cfg)::String
+    architecture = get(model_cfg, "architecture", DEFAULT_MODEL_ARCHITECTURE)
+    return lowercase(String(architecture))
+end
 
+function build_mlp_model(model_cfg)
     act_map = Dict(
         "relu" => relu,
         "tanh" => tanh,
         "identity" => identity,
     )
 
+    haskey(model_cfg, "layers") || throw(ArgumentError("Model configuration is missing the 'layers' section."))
     shared_layers = [Dense(layer["in"] => layer["out"], act_map[layer["activation"]]) for layer in model_cfg["layers"]["shared"]]
     policy_layers = [Dense(layer["in"] => layer["out"], act_map[layer["activation"]]) for layer in model_cfg["layers"]["policy"]]
     value_layers = [Dense(layer["in"] => layer["out"], act_map[layer["activation"]]) for layer in model_cfg["layers"]["value"]]
 
     return AwaleModel(Chain(shared_layers...), Chain(policy_layers...), Chain(value_layers...))
+end
+
+function select_model_config(model_cfg, architecture::String)
+    if haskey(model_cfg, "variants")
+        variants = model_cfg["variants"]
+        variant_cfg = get(variants, architecture, nothing)
+        variant_cfg === nothing && throw(ArgumentError("Unsupported model architecture '$architecture'. Available variants: $(join(sort!(collect(keys(variants))), ", "))."))
+        return variant_cfg
+    end
+
+    return model_cfg
+end
+
+function create_model(config_path::String=joinpath(@__DIR__, "config.toml"))
+    config = TOML.parsefile(config_path)
+    model_cfg = config["model"]
+    architecture = model_architecture(model_cfg)
+    selected_cfg = select_model_config(model_cfg, architecture)
+
+    if architecture == DEFAULT_MODEL_ARCHITECTURE
+        return build_mlp_model(selected_cfg)
+    end
+
+    throw(ArgumentError("Unsupported model architecture '$architecture'. Only 'mlp' is implemented in this checkpoint-safe slice."))
 end
 
 function predict_raw(model::AwaleModel, X::AbstractMatrix{Float32})

@@ -38,6 +38,141 @@ end
         @test model.policy.layers[end].σ === identity
     end
 
+    @testset "architecture selector stays checkpoint-safe" begin
+        @test fieldcount(Awale.Model.AwaleModel) == 3
+
+        mktempdir() do tmpdir
+            config_path = joinpath(tmpdir, "config.toml")
+            write(config_path, """
+            [model]
+            input_dim = 48
+            encoding_shape = [4, 12]
+            architecture = "cnn"
+
+            [[model.layers.shared]]
+            type = "Dense"
+            in = 48
+            out = 128
+            activation = "relu"
+
+            [[model.layers.shared]]
+            type = "Dense"
+            in = 128
+            out = 128
+            activation = "relu"
+
+            [[model.layers.policy]]
+            type = "Dense"
+            in = 128
+            out = 64
+            activation = "relu"
+
+            [[model.layers.policy]]
+            type = "Dense"
+            in = 64
+            out = 6
+            activation = "identity"
+
+            [[model.layers.value]]
+            type = "Dense"
+            in = 128
+            out = 1
+            activation = "tanh"
+            """)
+
+            @test_throws ArgumentError Awale.create_model(config_path)
+        end
+
+        mktempdir() do tmpdir
+            config_path = joinpath(tmpdir, "config.toml")
+            write(config_path, """
+            [model]
+            architecture = "mlp"
+
+            [model.variants.mlp]
+            input_dim = 48
+            encoding_shape = [4, 12]
+
+            [[model.variants.mlp.layers.shared]]
+            type = "Dense"
+            in = 48
+            out = 128
+            activation = "relu"
+
+            [[model.variants.mlp.layers.shared]]
+            type = "Dense"
+            in = 128
+            out = 128
+            activation = "relu"
+
+            [[model.variants.mlp.layers.policy]]
+            type = "Dense"
+            in = 128
+            out = 64
+            activation = "relu"
+
+            [[model.variants.mlp.layers.policy]]
+            type = "Dense"
+            in = 64
+            out = 6
+            activation = "identity"
+
+            [[model.variants.mlp.layers.value]]
+            type = "Dense"
+            in = 128
+            out = 1
+            activation = "tanh"
+            """)
+
+            model = Awale.create_model(config_path)
+            @test typeof(model) === Awale.Model.AwaleModel
+            @test model.policy.layers[end].σ === identity
+        end
+
+        mktempdir() do tmpdir
+            config_path = joinpath(tmpdir, "config.toml")
+            write(config_path, """
+            [model]
+            input_dim = 48
+            encoding_shape = [4, 12]
+
+            [[model.layers.shared]]
+            type = "Dense"
+            in = 48
+            out = 128
+            activation = "relu"
+
+            [[model.layers.shared]]
+            type = "Dense"
+            in = 128
+            out = 128
+            activation = "relu"
+
+            [[model.layers.policy]]
+            type = "Dense"
+            in = 128
+            out = 64
+            activation = "relu"
+
+            [[model.layers.policy]]
+            type = "Dense"
+            in = 64
+            out = 6
+            activation = "identity"
+
+            [[model.layers.value]]
+            type = "Dense"
+            in = 128
+            out = 1
+            activation = "tanh"
+            """)
+
+            model = Awale.create_model(config_path)
+            @test typeof(model) === Awale.Model.AwaleModel
+            @test model.policy.layers[end].σ === identity
+        end
+    end
+
     @testset "initial model creation is deterministic for a fixed seed" begin
         train_module = Module(:TrainInitSmoke)
         Core.eval(train_module, :(include(path) = Base.include($(train_module), path)))
