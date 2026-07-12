@@ -47,7 +47,7 @@ end
             [model]
             input_dim = 48
             encoding_shape = [4, 12]
-            architecture = "cnn"
+            architecture = "transformer"
 
             [[model.layers.shared]]
             type = "Dense"
@@ -133,34 +133,25 @@ end
             config_path = joinpath(tmpdir, "config.toml")
             write(config_path, """
             [model]
+            architecture = "cnn"
+
+            [model.variants.cnn]
             input_dim = 48
             encoding_shape = [4, 12]
 
-            [[model.layers.shared]]
-            type = "Dense"
-            in = 48
-            out = 128
-            activation = "relu"
-
-            [[model.layers.shared]]
-            type = "Dense"
-            in = 128
-            out = 128
-            activation = "relu"
-
-            [[model.layers.policy]]
+            [[model.variants.cnn.layers.policy]]
             type = "Dense"
             in = 128
             out = 64
             activation = "relu"
 
-            [[model.layers.policy]]
+            [[model.variants.cnn.layers.policy]]
             type = "Dense"
             in = 64
             out = 6
             activation = "identity"
 
-            [[model.layers.value]]
+            [[model.variants.cnn.layers.value]]
             type = "Dense"
             in = 128
             out = 1
@@ -168,10 +159,29 @@ end
             """)
 
             model = Awale.create_model(config_path)
+            s1 = Awale.initial_state()
+            s2 = Awale.transition(s1, 1)
+            logits1, value1 = Awale.predict(model, s1)
+            logits2, value2 = Awale.predict(model, s2)
+            batch_logits, batch_values = Awale.predict_batch(model, [s1, s2])
+
             @test typeof(model) === Awale.Model.AwaleModel
-            @test model.policy.layers[end].σ === identity
+            @test length(logits1) == 6
+            @test isfinite(value1)
+            @test batch_logits[:, 1] ≈ logits1
+            @test batch_logits[:, 2] ≈ logits2
+            @test batch_values[1, 1] ≈ value1
+            @test batch_values[1, 2] ≈ value2
+
+            mktempdir() do checkpoint_dir
+                model_path = joinpath(checkpoint_dir, "cnn-model.bin")
+                Awale.Model.save_model(model, model_path)
+                loaded_model = Awale.Model.load_model(model_path)
+                @test Awale.predict(loaded_model, s1) == (logits1, value1)
+            end
         end
     end
+
 
     @testset "initial model creation is deterministic for a fixed seed" begin
         train_module = Module(:TrainInitSmoke)
@@ -431,8 +441,8 @@ end
 
 
         mktempdir() do tmpdir
-            best_path = joinpath(tmpdir, "model_best.bin")
-            train_module.BEST_CHECKPOINT_PATH = best_path
+            train_module.CHECKPOINT_DIR = joinpath(tmpdir, "checkpoints")
+            best_path = train_module.training_best_checkpoint_path()
             initial_model = train_module.Awale.create_model()
             candidate_model = train_module.Awale.create_model()
             train_module.save_model(initial_model, best_path)
@@ -485,13 +495,7 @@ end
         end
 
         mktempdir() do tmpdir
-            checkpoint_dir = joinpath(tmpdir, "checkpoints")
-            mkpath(checkpoint_dir)
-            train_module.CHECKPOINT_DIR = checkpoint_dir
-            train_module.LAST_CHECKPOINT_PATH = joinpath(checkpoint_dir, "model_last.bin")
-            train_module.BEST_CHECKPOINT_PATH = joinpath(checkpoint_dir, "model_best.bin")
-            train_module.CHECKPOINT_PATH = joinpath(checkpoint_dir, "model_final.bin")
-            train_module.STATE_PATH = joinpath(checkpoint_dir, "training_state.toml")
+            train_module.CHECKPOINT_DIR = joinpath(tmpdir, "checkpoints")
             train_module.NUM_ITERATIONS = 27
             train_module.GAMES_PER_ITERATION = 1
             train_module.SIMS_PER_MOVE = 1
@@ -508,9 +512,13 @@ end
             train_module.USE_RANDOM_ANCHOR = false
             train_module.USE_HEURISTIC_ANCHOR = false
 
+            last_checkpoint_path = train_module.training_last_checkpoint_path()
+            state_path = train_module.training_state_file_path()
+            final_checkpoint_path = train_module.evaluation_checkpoint_path()
+
             Random.seed!(1234)
-            train_module.save_model(train_module.Awale.create_model(), train_module.LAST_CHECKPOINT_PATH)
-            train_module.write_training_state(train_module.STATE_PATH, 24, 0.0)
+            train_module.save_model(train_module.Awale.create_model(), last_checkpoint_path)
+            train_module.write_training_state(state_path, 24, 0.0)
             first_output = mktemp() do path, io
                 redirect_stdout(io) do
                     train_module.main(String[])
@@ -523,10 +531,10 @@ end
             @test occursin("Reanudando desde la iteración 24", first_output)
             @test occursin("Contrato de reanudación: weights-only", first_output)
             @test occursin("Best-selection target: 1 sims, 2 games, 1 openings, threshold", first_output)
-            @test isfile(joinpath(checkpoint_dir, "model_iter_25.bin"))
-            @test !isfile(joinpath(checkpoint_dir, "model_iter_26.bin"))
-            @test !isfile(joinpath(checkpoint_dir, "model_iter_27.bin"))
-            @test isfile(joinpath(checkpoint_dir, "model_final.bin"))
+            @test isfile(train_module.training_snapshot_path(25))
+            @test !isfile(train_module.training_snapshot_path(26))
+            @test !isfile(train_module.training_snapshot_path(27))
+            @test isfile(final_checkpoint_path)
 
             second_output = mktemp() do path, io
                 redirect_stdout(io) do
@@ -575,7 +583,41 @@ end
         @test_throws ArgumentError play_module.parse_int_option("--sims", "foo")
         @test play_module.exhibition_stochastic(Dict("agent1" => "best", "agent2" => "human"))
         @test !play_module.exhibition_stochastic(Dict("agent1" => "best", "agent2" => "human", "deterministic" => "true"))
-        @test endswith(play_module.resolve_checkpoint_path("best"), "model_best.bin")
+
+        original_checkpoint_dir = play_module.CHECKPOINT_DIR
+        original_model_config_path = play_module.MODEL_CONFIG_PATH
+        try
+            mktempdir() do tmpdir
+                model_config_path = joinpath(tmpdir, "model-config.toml")
+                write(model_config_path, "[model]\narchitecture = \"cnn\"\n")
+                play_module.CHECKPOINT_DIR = tmpdir
+                play_module.MODEL_CONFIG_PATH = model_config_path
+
+                namespaced_path = joinpath(tmpdir, "cnn", "model_best.bin")
+                legacy_path = joinpath(tmpdir, "model_best.bin")
+                mkpath(dirname(namespaced_path))
+                touch(namespaced_path)
+                touch(legacy_path)
+
+                @test play_module.resolve_checkpoint_path("best") == namespaced_path
+            end
+
+            mktempdir() do tmpdir
+                model_config_path = joinpath(tmpdir, "model-config.toml")
+                write(model_config_path, "[model]\narchitecture = \"cnn\"\n")
+                play_module.CHECKPOINT_DIR = tmpdir
+                play_module.MODEL_CONFIG_PATH = model_config_path
+
+                legacy_path = joinpath(tmpdir, "model_best.bin")
+                touch(legacy_path)
+
+                @test play_module.resolve_checkpoint_path("best") == legacy_path
+            end
+        finally
+            play_module.CHECKPOINT_DIR = original_checkpoint_dir
+            play_module.MODEL_CONFIG_PATH = original_model_config_path
+        end
+
         @test endswith(play_module.resolve_checkpoint_path("final"), "model_final.bin")
 
         mktempdir() do tmpdir
@@ -658,6 +700,107 @@ end
             partial_cache = arena_module.build_model_cache([5])
             @test arena_module.run_duel("best", 5; sims=0, games=2, openings=openings, model_cache=partial_cache) === nothing
             @test arena_module.run_duel("best", 5; sims=0, games=2, openings=openings) !== nothing
+        end
+
+        mktempdir() do tmpdir
+            checkpoint_dir = joinpath(tmpdir, "checkpoints")
+            mkpath(joinpath(checkpoint_dir, "mlp"))
+            mkpath(joinpath(checkpoint_dir, "cnn"))
+
+            mlp_config_path = joinpath(tmpdir, "mlp.toml")
+            write(mlp_config_path, """
+            [model]
+            architecture = "mlp"
+
+            [model.variants.mlp]
+            input_dim = 48
+            encoding_shape = [4, 12]
+
+            [[model.variants.mlp.layers.shared]]
+            type = "Dense"
+            in = 48
+            out = 128
+            activation = "relu"
+
+            [[model.variants.mlp.layers.shared]]
+            type = "Dense"
+            in = 128
+            out = 128
+            activation = "relu"
+
+            [[model.variants.mlp.layers.policy]]
+            type = "Dense"
+            in = 128
+            out = 64
+            activation = "relu"
+
+            [[model.variants.mlp.layers.policy]]
+            type = "Dense"
+            in = 64
+            out = 6
+            activation = "identity"
+
+            [[model.variants.mlp.layers.value]]
+            type = "Dense"
+            in = 128
+            out = 1
+            activation = "tanh"
+            """)
+
+            cnn_config_path = joinpath(tmpdir, "cnn.toml")
+            write(cnn_config_path, """
+            [model]
+            architecture = "cnn"
+
+            [model.variants.cnn]
+            input_dim = 48
+            encoding_shape = [4, 12]
+
+            [[model.variants.cnn.layers.policy]]
+            type = "Dense"
+            in = 128
+            out = 64
+            activation = "relu"
+
+            [[model.variants.cnn.layers.policy]]
+            type = "Dense"
+            in = 64
+            out = 6
+            activation = "identity"
+
+            [[model.variants.cnn.layers.value]]
+            type = "Dense"
+            in = 128
+            out = 1
+            activation = "tanh"
+            """)
+
+            Random.seed!(2024)
+            mlp_model = arena_module.Awale.create_model(mlp_config_path)
+            cnn_model = arena_module.Awale.create_model(cnn_config_path)
+            mlp_checkpoint = joinpath(checkpoint_dir, "mlp", "model_best.bin")
+            cnn_checkpoint = joinpath(checkpoint_dir, "cnn", "model_best.bin")
+            arena_module.Awale.Model.save_model(mlp_model, mlp_checkpoint)
+            arena_module.Awale.Model.save_model(cnn_model, cnn_checkpoint)
+
+            original_checkpoint_dir = arena_module.CHECKPOINT_DIR
+            original_model_config_path = arena_module.MODEL_CONFIG_PATH
+            arena_module.CHECKPOINT_DIR = checkpoint_dir
+            arena_module.MODEL_CONFIG_PATH = mlp_config_path
+            try
+                @test arena_module.checkpoint_path("best") == mlp_checkpoint
+                @test arena_module.checkpoint_path("best"; architecture="mlp") == mlp_checkpoint
+                @test arena_module.checkpoint_path("best"; architecture="cnn") == cnn_checkpoint
+
+                openings = arena_module.generate_opening_suite(plies=[0], seed=321, openings_per_ply=1)
+                duel_a = arena_module.run_duel("best", "best"; architecture_a="mlp", architecture_b="cnn", sims=0, games=2, openings=openings)
+                duel_b = arena_module.run_duel("best", "best"; architecture_a="mlp", architecture_b="cnn", sims=0, games=2, openings=openings)
+                @test duel_a !== nothing
+                @test duel_a == duel_b
+            finally
+                arena_module.CHECKPOINT_DIR = original_checkpoint_dir
+                arena_module.MODEL_CONFIG_PATH = original_model_config_path
+            end
         end
 
         mktempdir() do tmpdir

@@ -6,6 +6,7 @@ using .Awale.Env: is_terminal, transition, legal_actions
 using .Awale.Model: load_model
 using .Awale.Evaluation: ModelAgent, result_from_terminal_state, select_action
 using .Awale.MCTS: MCTSSearch, search
+using .Awale.Utils: architecture_scoped_candidates, first_existing_path
 using Random
 using TOML
 
@@ -20,6 +21,8 @@ const DEFAULT_AGENT2_SPEC = "human"
 const DEFAULT_SIMS = Int(get(eval_cfg, "sims_per_eval", 100))
 const MAX_TURNS = Int(training_cfg["max_turns"])
 const C_PUCT = Float32(mcts_cfg["c_puct"])
+CHECKPOINT_DIR = String(training_cfg["checkpoint_dir"])
+MODEL_CONFIG_PATH = abspath(ROOT_DIR, String(get(training_cfg, "model_config_path", joinpath("src", "Awale", "config.toml"))))
 
 struct HumanAgent end
 
@@ -27,14 +30,28 @@ function resolve_path(path::AbstractString)::String
     return isabspath(path) ? String(path) : joinpath(ROOT_DIR, String(path))
 end
 
+function model_architecture_name()
+    return Awale.Model.model_architecture(TOML.parsefile(MODEL_CONFIG_PATH)["model"])
+end
+
+function checkpoint_candidates(configured_path::AbstractString, default_filename::AbstractString)
+    return [resolve_path(path) for path in architecture_scoped_candidates(CHECKPOINT_DIR, model_architecture_name(), configured_path, default_filename)]
+end
+
 function resolve_checkpoint_path(spec::AbstractString)::String
     normalized = lowercase(strip(spec))
     if normalized == "best"
-        return resolve_path(String(get(training_cfg, "best_checkpoint_path", joinpath("checkpoints", "model_best.bin"))))
+        candidates = checkpoint_candidates(String(get(training_cfg, "best_checkpoint_path", joinpath(CHECKPOINT_DIR, "model_best.bin"))), "model_best.bin")
+        found = first_existing_path(candidates)
+        return found === nothing ? first(candidates) : found
     elseif normalized == "last"
-        return resolve_path(String(get(training_cfg, "last_checkpoint_path", joinpath("checkpoints", "model_last.bin"))))
+        candidates = checkpoint_candidates(String(get(training_cfg, "last_checkpoint_path", joinpath(CHECKPOINT_DIR, "model_last.bin"))), "model_last.bin")
+        found = first_existing_path(candidates)
+        return found === nothing ? first(candidates) : found
     elseif normalized == "final"
-        return resolve_path(String(get(eval_cfg, "checkpoint_path", joinpath("checkpoints", "model_final.bin"))))
+        candidates = checkpoint_candidates(String(get(eval_cfg, "checkpoint_path", joinpath(CHECKPOINT_DIR, "model_final.bin"))), "model_final.bin")
+        found = first_existing_path(candidates)
+        return found === nothing ? first(candidates) : found
     end
 
     return resolve_path(spec)

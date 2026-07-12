@@ -9,6 +9,9 @@ using ..Utils: fnv1a64
 export create_model, predict, predict_batch, predict_raw, encode_state, save_model, load_model
 
 const DEFAULT_MODEL_ARCHITECTURE = "mlp"
+const CNN_SHARED_FEATURES = 128
+const CNN_CONV1_CHANNELS = 8
+const CNN_CONV2_CHANNELS = 16
 
 mutable struct AwaleModel
     shared::Chain
@@ -19,24 +22,64 @@ end
 # Use @layer for Flux >= 0.15 to avoid deprecation warnings and ensure parameter tracking
 Flux.@layer AwaleModel
 
+struct ReshapeToCNN end
+(layer::ReshapeToCNN)(x::AbstractMatrix{Float32}) = reshape(x, 4, 12, 1, size(x, 2))
+
+struct FlattenBatch end
+(layer::FlattenBatch)(x) = reshape(x, :, size(x, ndims(x)))
+
 function model_architecture(model_cfg)::String
     architecture = get(model_cfg, "architecture", DEFAULT_MODEL_ARCHITECTURE)
     return lowercase(String(architecture))
 end
 
-function build_mlp_model(model_cfg)
-    act_map = Dict(
+function activation_map()
+    return Dict(
         "relu" => relu,
         "tanh" => tanh,
         "identity" => identity,
     )
+end
+
+function build_dense_chain(layer_specs, act_map)
+    return Chain([Dense(layer["in"] => layer["out"], act_map[layer["activation"]]) for layer in layer_specs]...)
+end
+
+function build_mlp_model(model_cfg)
+    act_map = activation_map()
 
     haskey(model_cfg, "layers") || throw(ArgumentError("Model configuration is missing the 'layers' section."))
-    shared_layers = [Dense(layer["in"] => layer["out"], act_map[layer["activation"]]) for layer in model_cfg["layers"]["shared"]]
-    policy_layers = [Dense(layer["in"] => layer["out"], act_map[layer["activation"]]) for layer in model_cfg["layers"]["policy"]]
-    value_layers = [Dense(layer["in"] => layer["out"], act_map[layer["activation"]]) for layer in model_cfg["layers"]["value"]]
+    layers = model_cfg["layers"]
+    haskey(layers, "shared") || throw(ArgumentError("Model configuration is missing the 'shared' layer stack."))
+    haskey(layers, "policy") || throw(ArgumentError("Model configuration is missing the 'policy' layer stack."))
+    haskey(layers, "value") || throw(ArgumentError("Model configuration is missing the 'value' layer stack."))
 
-    return AwaleModel(Chain(shared_layers...), Chain(policy_layers...), Chain(value_layers...))
+    shared_layers = build_dense_chain(layers["shared"], act_map)
+    policy_layers = build_dense_chain(layers["policy"], act_map)
+    value_layers = build_dense_chain(layers["value"], act_map)
+
+    return AwaleModel(shared_layers, policy_layers, value_layers)
+end
+
+function build_cnn_model(model_cfg)
+    act_map = activation_map()
+
+    haskey(model_cfg, "layers") || throw(ArgumentError("Model configuration is missing the 'layers' section."))
+    layers = model_cfg["layers"]
+    haskey(layers, "policy") || throw(ArgumentError("Model configuration is missing the 'policy' layer stack."))
+    haskey(layers, "value") || throw(ArgumentError("Model configuration is missing the 'value' layer stack."))
+
+    shared_layers = Chain(
+        ReshapeToCNN(),
+        Conv((3, 3), 1 => CNN_CONV1_CHANNELS, relu; pad=1),
+        Conv((3, 3), CNN_CONV1_CHANNELS => CNN_CONV2_CHANNELS, relu; pad=1),
+        FlattenBatch(),
+        Dense(CNN_CONV2_CHANNELS * 4 * 12 => CNN_SHARED_FEATURES, relu),
+    )
+    policy_layers = build_dense_chain(layers["policy"], act_map)
+    value_layers = build_dense_chain(layers["value"], act_map)
+
+    return AwaleModel(shared_layers, policy_layers, value_layers)
 end
 
 function select_model_config(model_cfg, architecture::String)
@@ -58,9 +101,11 @@ function create_model(config_path::String=joinpath(@__DIR__, "config.toml"))
 
     if architecture == DEFAULT_MODEL_ARCHITECTURE
         return build_mlp_model(selected_cfg)
+    elseif architecture == "cnn"
+        return build_cnn_model(selected_cfg)
     end
 
-    throw(ArgumentError("Unsupported model architecture '$architecture'. Only 'mlp' is implemented in this checkpoint-safe slice."))
+    throw(ArgumentError("Unsupported model architecture '$architecture'. Only 'mlp' and 'cnn' are implemented in this checkpoint-safe slice."))
 end
 
 function predict_raw(model::AwaleModel, X::AbstractMatrix{Float32})
