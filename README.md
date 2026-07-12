@@ -10,7 +10,7 @@ El proyecto ya tiene una pipeline funcional de entrenamiento/evaluación, pero s
 
 ### Configuración del proyecto
 
-El sistema usa `config.toml` como configuración local de runtime para entrenamiento, evaluación y juego. La plantilla versionada vive en `config.toml.example`; copiála a `config.toml` y editala localmente. Las semillas de inicialización/bootstrapping del entrenamiento y límites compartidos como `training.max_turns` se controlan desde ahí, así que la reproducibilidad y los topes de runtime no quedan hardcodeados. La arquitectura del modelo vive en `src/Awale/config.toml` de forma local/no versionada; la plantilla versionada vive en `src/Awale/config.toml.example`.
+El sistema usa `config.toml` como configuración local de runtime para entrenamiento, evaluación y juego. La plantilla versionada vive en `config.toml.example`; copiála a `config.toml` y editala localmente. Las semillas de inicialización/bootstrapping del entrenamiento y límites compartidos como `training.max_turns` se controlan desde ahí, así que la reproducibilidad y los topes de runtime no quedan hardcodeados. La arquitectura del modelo vive en `src/Awale/config.toml` de forma local/no versionada; la plantilla versionada vive en `src/Awale/config.toml.example`. Los checkpoints y logs de entrenamiento se agrupan por arquitectura bajo `checkpoints/<arquitectura>/` para separar corridas de MLP, CNN y futuras variantes.
 
 ### Scripts principales
 
@@ -80,7 +80,7 @@ julia --project=. test/runtests.jl
 julia --project=. .\train.jl
 ```
 
-El entrenamiento usa tu `config.toml` local, guarda `model_last.bin`, `model_best.bin`, `model_final.bin` y snapshots `model_iter_N.bin` solo en hitos automáticos: iteración 1, potencias de 2 y múltiplos de `checkpoint_every`.
+El entrenamiento usa tu `config.toml` local, guarda `model_last.bin`, `model_best.bin`, `model_final.bin` y snapshots `model_iter_N.bin` bajo `checkpoints/<arquitectura>/` solo en hitos automáticos: iteración 1, potencias de 2 y múltiplos de `checkpoint_every`. El log de entrenamiento también se guarda bajo `checkpoints/<arquitectura>/log/` e incluye la arquitectura activa en el nombre y en el contenido copiado.
 
 Los checkpoints `.bin` se tratan como artefactos locales de confianza: el flujo actual usa `Serialization` para checkpoints generados por el propio repo, no como un formato para cargar archivos arbitrarios de terceros.
 
@@ -98,18 +98,27 @@ Usalo como sanity check. Si el modelo ya domina `RandomAgent` y `HeuristicAgent`
 julia --project=. .\checkpoint_arena.jl
 ```
 
-Usalo para responder si hay progreso real entre checkpoints de la misma pipeline. Hoy es la evaluación más útil para distinguir señal de ruido porque compara checkpoints consecutivos sobre una opening suite reproducible.
+Usalo para responder si hay progreso real entre checkpoints de la misma pipeline. Hoy es la evaluación más útil para distinguir señal de ruido porque compara checkpoints consecutivos sobre una opening suite reproducible. El arena resuelve checkpoints del namespace de la arquitectura activa y conserva fallback legacy al root para artefactos viejos.
+
+Si querés comparar arquitecturas distintas en la misma corrida, usá la API interna `run_duel` con selectores explícitos por arquitectura. Ejemplo en Julia:
+
+```julia
+include("checkpoint_arena.jl")
+run_duel("best", "best"; architecture_a="mlp", architecture_b="cnn", sims=0, games=2)
+```
+
+Eso mantiene el flujo por defecto intacto, pero te deja chequear `mlp(best)` contra `cnn(best)` de forma explícita.
 
 ### 6. Partidas de exhibición
 
-`play.jl` está pensado para una sola partida visible en terminal. Permite elegir ambos agentes por línea de comando: `human`, `best`, `last`, `final` o un path explícito a un checkpoint. También acepta `--sims` para controlar cuántas simulaciones usa cada agente IA, `--max-turns` para limitar la duración de la partida, `--seed` para reproducir una exhibición estocástica y `--deterministic` para desactivar esa variación.
+`play.jl` está pensado para una sola partida visible en terminal. Permite elegir ambos agentes por línea de comando: `human`, `best`, `last`, `final` o un path explícito a un checkpoint. Los alias `best/last/final` resuelven primero el namespace de la arquitectura activa (`checkpoints/<arquitectura>/...`) y después caen al path legacy del root si hace falta. También acepta `--sims` para controlar cuántas simulaciones usa cada agente IA, `--max-turns` para limitar la duración de la partida, `--seed` para reproducir una exhibición estocástica y `--deterministic` para desactivar esa variación.
 
 Ejemplos:
 
 ```powershell
 julia --project=. .\play.jl --agent1 best --agent2 human
 julia --project=. .\play.jl --agent1 best --agent2 final
-julia --project=. .\play.jl --agent1 checkpoints\model_best.bin --agent2 human
+julia --project=. .\play.jl --agent1 checkpoints\<arquitectura>\model_best.bin --agent2 human
 julia --project=. .\play.jl --agent1 best --agent2 final --sims 200 --max-turns 120
 julia --project=. .\play.jl --agent1 best --agent2 final --seed 42
 julia --project=. .\play.jl --agent1 best --agent2 final --deterministic
@@ -130,7 +139,7 @@ Usalo solo para medir hot paths y comparar impacto de cambios de performance.
 - `spec/`: contratos actuales del sistema y notas de diseño
 - `src/`: código fuente (módulos: `Awale/State`, `Awale/Env`, `Awale/MCTS`, `Awale/Model`, `Awale/Training`, `Awale/Utils`)
 - `test/`: pruebas unitarias, invariantes y regresión
-- `checkpoints/`: modelos y estado de entrenamiento
+- `checkpoints/`: modelos y estado de entrenamiento, agrupados por arquitectura
 - `scripts/`: entrypoints auxiliares como microbenchmarks
 - `.github/`: CI
 

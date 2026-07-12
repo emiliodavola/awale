@@ -7,6 +7,7 @@ using .Awale.Model: save_model, load_model, atomic_write
 using .Awale.Evaluation: HeuristicAgent, RandomAgent, ModelAgent, evaluate_agents, evaluate_agents_on_openings, generate_opening_suite
 using .Awale.MCTS: MCTSSearch
 using .Awale.ReplayBuffers: ReplayBuffer
+using .Awale.Utils: architecture_slug, architecture_scoped_path, architecture_scoped_candidates, first_existing_path
 using Random
 using TOML
 using Dates
@@ -29,13 +30,13 @@ REPLAY_RECENT_FRACTION = Float64(get(training_cfg, "replay_recent_fraction", 0.5
 REPLAY_RECENT_WINDOW = Int(get(training_cfg, "replay_recent_window", 4096))
 TEMPERATURE_MOVES = Int(get(training_cfg, "temperature_moves", 20))
 CHECKPOINT_EVERY = Int(get(training_cfg, "checkpoint_every", 25))
-LAST_CHECKPOINT_PATH = String(get(training_cfg, "last_checkpoint_path", joinpath(CHECKPOINT_DIR, "model_last.bin")))
-BEST_CHECKPOINT_PATH = String(get(training_cfg, "best_checkpoint_path", joinpath(CHECKPOINT_DIR, "model_best.bin")))
-STATE_PATH = String(get(training_cfg, "state_path", joinpath(CHECKPOINT_DIR, "training_state.toml")))
 MODEL_CONFIG_PATH = abspath(ROOT_DIR, String(get(training_cfg, "model_config_path", joinpath("src", "Awale", "config.toml"))))
 EVAL_GAMES = Int(eval_cfg["eval_games"])
 SIMS_PER_EVAL = Int(eval_cfg["sims_per_eval"])
-CHECKPOINT_PATH = String(eval_cfg["checkpoint_path"])
+LAST_CHECKPOINT_PATH = architecture_scoped_path(CHECKPOINT_DIR, Awale.Model.model_architecture(TOML.parsefile(MODEL_CONFIG_PATH)["model"]), String(get(training_cfg, "last_checkpoint_path", joinpath(CHECKPOINT_DIR, "model_last.bin"))), "model_last.bin")
+BEST_CHECKPOINT_PATH = architecture_scoped_path(CHECKPOINT_DIR, Awale.Model.model_architecture(TOML.parsefile(MODEL_CONFIG_PATH)["model"]), String(get(training_cfg, "best_checkpoint_path", joinpath(CHECKPOINT_DIR, "model_best.bin"))), "model_best.bin")
+STATE_PATH = architecture_scoped_path(CHECKPOINT_DIR, Awale.Model.model_architecture(TOML.parsefile(MODEL_CONFIG_PATH)["model"]), String(get(training_cfg, "state_path", joinpath(CHECKPOINT_DIR, "training_state.toml"))), "training_state.toml")
+CHECKPOINT_PATH = architecture_scoped_path(CHECKPOINT_DIR, Awale.Model.model_architecture(TOML.parsefile(MODEL_CONFIG_PATH)["model"]), String(eval_cfg["checkpoint_path"]), "model_final.bin")
 BEST_TARGET_SIMS = Int(get(selection_cfg, "target_sims", SIMS_PER_EVAL))
 BEST_PROMOTION_GAMES = Int(get(selection_cfg, "promotion_games", EVAL_GAMES))
 BEST_PROMOTION_THRESHOLD = Float64(get(selection_cfg, "promotion_threshold", 55.0))
@@ -51,6 +52,72 @@ const INITIAL_MODEL_SEED = Int(training_cfg["initial_model_seed"])
 const BOOTSTRAP_RNG_SEED = Int(training_cfg["bootstrap_rng_seed"])
 const MAX_TURNS = Int(training_cfg["max_turns"])
 const TRAINING_STATE_RESUME_CONTRACT = "weights-only"
+
+function model_architecture_name()
+    return Awale.Model.model_architecture(TOML.parsefile(MODEL_CONFIG_PATH)["model"])
+end
+
+function checkpoint_namespace_dir()
+    return joinpath(CHECKPOINT_DIR, architecture_slug(model_architecture_name()))
+end
+
+function checkpoint_write_path(configured_path::AbstractString, default_filename::AbstractString)
+    return architecture_scoped_path(CHECKPOINT_DIR, model_architecture_name(), configured_path, default_filename)
+end
+
+function checkpoint_candidates(configured_path::AbstractString, default_filename::AbstractString)
+    return architecture_scoped_candidates(CHECKPOINT_DIR, model_architecture_name(), configured_path, default_filename)
+end
+
+function checkpoint_existing_path(configured_path::AbstractString, default_filename::AbstractString)
+    return first_existing_path(checkpoint_candidates(configured_path, default_filename))
+end
+
+function training_log_dir()
+    return joinpath(checkpoint_namespace_dir(), "log")
+end
+
+function training_log_file_path()
+    timestamp = Dates.format(Dates.now(), "yyyy_mm_dd_HH_mm")
+    architecture = architecture_slug(model_architecture_name())
+    return joinpath(training_log_dir(), "training_config_$(architecture)_$timestamp.toml")
+end
+
+function training_snapshot_path(iter::Int)
+    return joinpath(checkpoint_namespace_dir(), "model_iter_$(iter).bin")
+end
+
+function training_last_checkpoint_path()
+    return checkpoint_write_path(String(get(training_cfg, "last_checkpoint_path", joinpath(CHECKPOINT_DIR, "model_last.bin"))), "model_last.bin")
+end
+
+function training_last_checkpoint_existing_path()
+    return checkpoint_existing_path(String(get(training_cfg, "last_checkpoint_path", joinpath(CHECKPOINT_DIR, "model_last.bin"))), "model_last.bin")
+end
+
+function training_best_checkpoint_path()
+    return checkpoint_write_path(String(get(training_cfg, "best_checkpoint_path", joinpath(CHECKPOINT_DIR, "model_best.bin"))), "model_best.bin")
+end
+
+function training_best_checkpoint_existing_path()
+    return checkpoint_existing_path(String(get(training_cfg, "best_checkpoint_path", joinpath(CHECKPOINT_DIR, "model_best.bin"))), "model_best.bin")
+end
+
+function training_state_file_path()
+    return checkpoint_write_path(String(get(training_cfg, "state_path", joinpath(CHECKPOINT_DIR, "training_state.toml"))), "training_state.toml")
+end
+
+function training_state_existing_path()
+    return checkpoint_existing_path(String(get(training_cfg, "state_path", joinpath(CHECKPOINT_DIR, "training_state.toml"))), "training_state.toml")
+end
+
+function evaluation_checkpoint_path()
+    return checkpoint_write_path(String(get(eval_cfg, "checkpoint_path", joinpath(CHECKPOINT_DIR, "model_final.bin"))), "model_final.bin")
+end
+
+function evaluation_checkpoint_existing_path()
+    return checkpoint_existing_path(String(get(eval_cfg, "checkpoint_path", joinpath(CHECKPOINT_DIR, "model_final.bin"))), "model_final.bin")
+end
 
 function write_training_state(path::String, last_iter::Int, best_selection_score::Float64)
     atomic_write(path) do io
@@ -126,9 +193,10 @@ function evaluate_best_promotion(candidate_model)
     candidate_agent = ModelAgent(MCTSSearch(candidate_model, C_PUCT, Dict{UInt64, Tuple{Float32, Int64}}()), BEST_TARGET_SIMS)
     current_best_results = nothing
     current_best_rate = nothing
+    best_checkpoint_path = training_best_checkpoint_existing_path()
 
-    if isfile(BEST_CHECKPOINT_PATH)
-        best_model = load_model(BEST_CHECKPOINT_PATH)
+    if best_checkpoint_path !== nothing
+        best_model = load_model(best_checkpoint_path)
         best_agent = ModelAgent(MCTSSearch(best_model, C_PUCT, Dict{UInt64, Tuple{Float32, Int64}}()), BEST_TARGET_SIMS)
         current_best_results = evaluate_agents_on_openings(candidate_agent, best_agent, selection_openings, BEST_PROMOTION_GAMES, selection_rng(1))
         current_best_rate = decided_win_rate(current_best_results)
@@ -164,31 +232,35 @@ function maybe_promote_best!(model, best_selection_score_ref, selection)
     end
 
     best_selection_score_ref[] = selection.promotion_score
-    save_model(model, BEST_CHECKPOINT_PATH)
+    save_model(model, training_best_checkpoint_path())
     return true
 end
 
-function save_run_config(log_dir::String)
+function save_run_config(log_dir::String, architecture::AbstractString)
     timestamp = Dates.format(Dates.now(), "yyyy_mm_dd_HH_mm")
-    log_file = joinpath(log_dir, "training_config_$timestamp.toml")
-    println("Registrando configuración en: $log_file")
+    arch = architecture_slug(architecture)
+    log_file = joinpath(log_dir, "training_config_$(arch)_$timestamp.toml")
+    println("Registrando configuración para arquitectura $arch en: $log_file")
 
     try
         data = read(joinpath(ROOT_DIR, "config.toml"), String)
-        write(log_file, data)
+        header = "# training_architecture = $arch\n# checkpoint_namespace = $(checkpoint_namespace_dir())\n"
+        write(log_file, header * data)
     catch err
         println("Error al copiar configuración: $err")
     end
 end
 
 function maybe_resume_from_legacy_checkpoint!(model_ref, start_iter_ref)
-    files = readdir(CHECKPOINT_DIR)
     found_iters = Int[]
 
-    for file in files
-        match_result = match(r"model_iter_(\d+)\.bin", file)
-        if match_result !== nothing
-            push!(found_iters, parse(Int, match_result.captures[1]))
+    for dir in (checkpoint_namespace_dir(), CHECKPOINT_DIR)
+        isdir(dir) || continue
+        for file in readdir(dir)
+            match_result = match(r"model_iter_(\d+)\.bin", file)
+            if match_result !== nothing
+                push!(found_iters, parse(Int, match_result.captures[1]))
+            end
         end
     end
 
@@ -199,7 +271,9 @@ function maybe_resume_from_legacy_checkpoint!(model_ref, start_iter_ref)
     last_iter = maximum(found_iters)
     if last_iter < NUM_ITERATIONS
         start_iter_ref[] = last_iter + 1
-        checkpoint_file = joinpath(CHECKPOINT_DIR, "model_iter_$last_iter.bin")
+        namespaced_checkpoint = training_snapshot_path(last_iter)
+        legacy_checkpoint = joinpath(CHECKPOINT_DIR, "model_iter_$last_iter.bin")
+        checkpoint_file = isfile(namespaced_checkpoint) ? namespaced_checkpoint : legacy_checkpoint
         println("¡Checkpoint legacy detectado! Reanudando desde la iteración $last_iter...")
         println("Cargando modelo: $checkpoint_file")
         model_ref[] = load_model(checkpoint_file)
@@ -223,16 +297,14 @@ function main(args::Vector{String}=Base.ARGS)
     validate_training_config()
     validate_selection_config(BEST_PROMOTION_GAMES, BEST_OPENING_PLIES, BEST_OPENINGS_PER_PLY)
 
-    if !isdir(CHECKPOINT_DIR)
-        mkdir(CHECKPOINT_DIR)
-    end
+    checkpoint_root = checkpoint_namespace_dir()
+    mkpath(checkpoint_root)
+    mkpath(training_log_dir())
 
-    log_dir = joinpath(CHECKPOINT_DIR, "log")
-    if !isdir(log_dir)
-        mkdir(log_dir)
-    end
+    println("Arquitectura activa: $(architecture_slug(model_architecture_name()))")
+    println("Checkpoint namespace: $checkpoint_root")
 
-    save_run_config(log_dir)
+    save_run_config(training_log_dir(), model_architecture_name())
 
     rng = Random.MersenneTwister(BOOTSTRAP_RNG_SEED)
 println("Bootstrap RNG seed: $BOOTSTRAP_RNG_SEED | max_turns: $MAX_TURNS")
@@ -241,30 +313,34 @@ println("Bootstrap RNG seed: $BOOTSTRAP_RNG_SEED | max_turns: $MAX_TURNS")
     best_selection_score = Ref(-1.0)
     model = Ref(create_initial_model())
 
+    last_checkpoint_path = training_last_checkpoint_existing_path()
+    training_state_path = training_state_existing_path()
+    checkpoint_path = evaluation_checkpoint_existing_path()
+
     if "--reset" in args
         println("⚠️ [RESTART] Modo reinicio activado. Ignorando checkpoints.")
-    elseif isfile(LAST_CHECKPOINT_PATH) && isfile(STATE_PATH)
-        last_iter, saved_best_selection_score, resume_contract = read_training_state(STATE_PATH)
+    elseif last_checkpoint_path !== nothing && training_state_path !== nothing
+        last_iter, saved_best_selection_score, resume_contract = read_training_state(training_state_path)
         best_selection_score[] = saved_best_selection_score
 
         if last_iter < NUM_ITERATIONS
             start_iter[] = last_iter + 1
             println("¡Checkpoint detectado! Reanudando desde la iteración $last_iter...")
             println("Contrato de reanudación: $resume_contract (solo pesos; optimizer/replay/RNG no se persisten).")
-            println("Cargando modelo: $LAST_CHECKPOINT_PATH")
-            model[] = load_model(LAST_CHECKPOINT_PATH)
+            println("Cargando modelo: $last_checkpoint_path")
+            model[] = load_model(last_checkpoint_path)
         else
             println("El entrenamiento alcanzó la iteración máxima ($last_iter).")
-            if isfile(CHECKPOINT_PATH)
-                model[] = load_model(CHECKPOINT_PATH)
+            if checkpoint_path !== nothing
+                model[] = load_model(checkpoint_path)
             else
-                model[] = load_model(LAST_CHECKPOINT_PATH)
+                model[] = load_model(last_checkpoint_path)
             end
             start_iter[] = NUM_ITERATIONS + 1
         end
-    elseif isfile(CHECKPOINT_PATH)
+    elseif checkpoint_path !== nothing
         println("¡Modelo final detectado! El entrenamiento ya fue completado.")
-        model[] = load_model(CHECKPOINT_PATH)
+        model[] = load_model(checkpoint_path)
         start_iter[] = NUM_ITERATIONS + 1
     else
         maybe_resume_from_legacy_checkpoint!(model, start_iter)
@@ -303,7 +379,7 @@ println("Bootstrap RNG seed: $BOOTSTRAP_RNG_SEED | max_turns: $MAX_TURNS")
             win_rate = (results.wins / EVAL_GAMES) * 100
             println("  Baseline vs Random @ $(SIMS_PER_EVAL) sims: $(round(win_rate, digits=2))% (W:$(results.wins) L:$(results.losses) D:$(results.draws))")
 
-            save_model(model[], LAST_CHECKPOINT_PATH)
+            save_model(model[], training_last_checkpoint_path())
 
             selection = evaluate_best_promotion(model[])
             println("  Best-selection target: $(BEST_TARGET_SIMS) sims, $(BEST_PROMOTION_GAMES) games, $(selection.openings) openings, threshold $(BEST_PROMOTION_THRESHOLD)%")
@@ -319,23 +395,23 @@ println("Bootstrap RNG seed: $BOOTSTRAP_RNG_SEED | max_turns: $MAX_TURNS")
             end
 
             if maybe_promote_best!(model[], best_selection_score, selection)
-                println("  ✅ Nuevo mejor modelo guardado en: $BEST_CHECKPOINT_PATH")
+                println("  ✅ Nuevo mejor modelo guardado en: $(training_best_checkpoint_path())")
             else
                 println("  ↳ Best no promovido: falló $(join(selection.gate_reasons, ", ")).")
             end
 
             if should_save_snapshot(iter, NUM_ITERATIONS, CHECKPOINT_EVERY)
-                snapshot_path = joinpath(CHECKPOINT_DIR, "model_iter_$iter.bin")
+                snapshot_path = training_snapshot_path(iter)
                 save_model(model[], snapshot_path)
                 println("  📦 Snapshot guardado en: $snapshot_path")
             end
 
-            write_training_state(STATE_PATH, iter, best_selection_score[])
+            write_training_state(training_state_file_path(), iter, best_selection_score[])
         end
 
-        save_model(model[], CHECKPOINT_PATH)
+        save_model(model[], evaluation_checkpoint_path())
         println("\n--- Entrenamiento Finalizado ---")
-        println(" Modelo final guardado en: $CHECKPOINT_PATH")
+        println(" Modelo final guardado en: $(evaluation_checkpoint_path())")
     else
         println("--- Entrenamiento ya completado. ---")
     end

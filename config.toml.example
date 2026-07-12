@@ -14,6 +14,7 @@ replay_recent_fraction = 0.5
 replay_recent_window = 4096
 temperature_moves = 20
 checkpoint_every = 25
+# Relative checkpoint/log files are stored under checkpoints/<architecture>/ at runtime.
 last_checkpoint_path = "checkpoints/model_last.bin"
 best_checkpoint_path = "checkpoints/model_best.bin"
 state_path = "checkpoints/training_state.toml"
