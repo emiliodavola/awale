@@ -436,8 +436,10 @@ end
         @test isdefined(play_module, :main)
         @test isdefined(arena_module, :main)
         @test arena_module.checkpoint_label(5) == "iter_5"
-        @test play_module.parse_args(["--agent1", "best", "--agent2", "human", "--sims", "200", "--max-turns", "120"]) == Dict("agent1" => "best", "agent2" => "human", "sims" => "200", "max-turns" => "120")
+        @test play_module.parse_args(["--agent1", "best", "--agent2", "human", "--sims", "200", "--max-turns", "120", "--seed", "42", "--deterministic"]) == Dict("agent1" => "best", "agent2" => "human", "sims" => "200", "max-turns" => "120", "seed" => "42", "deterministic" => "true")
         @test_throws ArgumentError play_module.parse_int_option("--sims", "foo")
+        @test play_module.exhibition_stochastic(Dict("agent1" => "best", "agent2" => "human"))
+        @test !play_module.exhibition_stochastic(Dict("agent1" => "best", "agent2" => "human", "deterministic" => "true"))
         @test endswith(play_module.resolve_checkpoint_path("best"), "model_best.bin")
         @test endswith(play_module.resolve_checkpoint_path("final"), "model_final.bin")
 
