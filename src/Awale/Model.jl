@@ -6,7 +6,7 @@ using Serialization
 using Statistics: mean
 using ..State: GameState, canonicalize, encode_state
 
-export create_model, predict, predict_batch, predict_raw, encode_state, save_model, load_model
+export create_model, predict, predict_batch, predict_inference, predict_batch_inference, predict_raw, encode_state, save_model, load_model
 
 mutable struct AwaleModel
     shared::Chain
@@ -220,7 +220,7 @@ function predict_raw(model::AwaleModel, X::AbstractMatrix{Float32})
     return logits, value
 end
 
-function with_testmode(f::Function, model::AwaleModel)
+function with_inference_mode(f::Function, model::AwaleModel)
     Flux.testmode!(model)
     try
         return f()
@@ -229,18 +229,38 @@ function with_testmode(f::Function, model::AwaleModel)
     end
 end
 
-function predict(model::AwaleModel, s::GameState)
+function predict_inference(model::AwaleModel, s::GameState)
     s_can = canonicalize(s)
     x = reshape(vec(encode_state(s_can)), :, 1)
-    return with_testmode(() -> begin
+    return with_inference_mode(() -> begin
         logits, value = predict_raw(model, x)
         return vec(logits), value[1]
     end, model)
 end
 
+function predict_batch_inference(model::AwaleModel, states::Vector{GameState})
+    X = hcat([vec(encode_state(canonicalize(s))) for s in states]...)
+    return with_inference_mode(() -> predict_raw(model, X), model)
+end
+
+function predict(model::AwaleModel, s::GameState)
+    s_can = canonicalize(s)
+    x = reshape(vec(encode_state(s_can)), :, 1)
+    logits, value = predict_raw(model, x)
+    return vec(logits), value[1]
+end
+
 function predict_batch(model::AwaleModel, states::Vector{GameState})
     X = hcat([vec(encode_state(canonicalize(s))) for s in states]...)
-    return with_testmode(() -> predict_raw(model, X), model)
+    return predict_raw(model, X)
+end
+
+function predict_inference(model, s::GameState)
+    return predict(model, s)
+end
+
+function predict_batch_inference(model, states::Vector{GameState})
+    return predict_batch(model, states)
 end
 
 function atomic_write(write_fn::Function, path::AbstractString)

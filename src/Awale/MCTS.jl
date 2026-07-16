@@ -2,7 +2,7 @@ module MCTS
 
 using ..State: GameState, canonicalize, serialize_state
 using ..Env: legal_actions, transition, is_terminal, reward
-using ..Model: predict
+using ..Model: predict_inference
 using ..Utils: fnv1a64
 using Random
 using Flux: softmax
@@ -74,7 +74,7 @@ function search_with_stats(
         return 0, zeros(Float32, 6)
     end
 
-    logits, _ = predict(mcts.model, root.state)
+    logits, _ = predict_inference(mcts.model, root.state)
     root_priors = legal_action_priors(vec(logits), actions)
 
     if add_root_noise
@@ -103,7 +103,7 @@ function search_with_stats(
         leaf_value = if is_terminal(leaf.state)
             reward(leaf.state)
         else
-            _, value = predict(mcts.model, leaf.state)
+            _, value = predict_inference(mcts.model, leaf.state)
             value
         end
         backup(path, leaf_value, mcts)
@@ -171,7 +171,7 @@ function expand(mcts::MCTSSearch, node::MCTSNode)
     actions = legal_actions(node.state)
     isempty(actions) && return
 
-    logits, _ = predict(mcts.model, node.state)
+    logits, _ = predict_inference(mcts.model, node.state)
     priors = legal_action_priors(vec(logits), actions)
 
     for (idx, action) in enumerate(actions)
