@@ -3,15 +3,10 @@ module Model
 using TOML
 using Flux
 using Serialization
+using Statistics: mean
 using ..State: GameState, canonicalize, encode_state
-using ..Utils: fnv1a64
 
 export create_model, predict, predict_batch, predict_raw, encode_state, save_model, load_model
-
-const DEFAULT_MODEL_ARCHITECTURE = "mlp"
-const CNN_SHARED_FEATURES = 128
-const CNN_CONV1_CHANNELS = 8
-const CNN_CONV2_CHANNELS = 16
 
 mutable struct AwaleModel
     shared::Chain
@@ -22,62 +17,179 @@ end
 # Use @layer for Flux >= 0.15 to avoid deprecation warnings and ensure parameter tracking
 Flux.@layer AwaleModel
 
-struct ReshapeToCNN end
-(layer::ReshapeToCNN)(x::AbstractMatrix{Float32}) = reshape(x, 4, 12, 1, size(x, 2))
+struct ReshapeLayer
+    shape::Vector{Int}
+end
 
-struct FlattenBatch end
-(layer::FlattenBatch)(x) = reshape(x, :, size(x, ndims(x)))
+(layer::ReshapeLayer)(x) = reshape(x, Tuple(layer.shape)..., size(x, ndims(x)))
+
+struct FlattenLayer end
+(layer::FlattenLayer)(x) = reshape(x, :, size(x, ndims(x)))
+
+struct GlobalAveragePoolLayer end
+
+function global_average_pool_dims(x)
+    ndims(x) <= 2 && return (1,)
+    return ntuple(identity, ndims(x) - 2)
+end
+
+(layer::GlobalAveragePoolLayer)(x) = mean(x; dims=global_average_pool_dims(x))
 
 function model_architecture(model_cfg)::String
-    architecture = get(model_cfg, "architecture", DEFAULT_MODEL_ARCHITECTURE)
+    architecture = get(model_cfg, "architecture", "mlp")
     return lowercase(String(architecture))
 end
 
 function activation_map()
     return Dict(
+        "identity" => identity,
         "relu" => relu,
         "tanh" => tanh,
-        "identity" => identity,
+        "sigmoid" => sigmoid,
     )
 end
 
-function build_dense_chain(layer_specs, act_map)
-    return Chain([Dense(layer["in"] => layer["out"], act_map[layer["activation"]]) for layer in layer_specs]...)
+function parse_activation(spec, act_map)
+    activation_name = lowercase(String(get(spec, "activation", "identity")))
+    activation = get(act_map, activation_name, nothing)
+    activation === nothing && throw(ArgumentError("Unsupported activation '$activation_name'. Available activations: $(join(sort!(collect(keys(act_map))), ", "))."))
+    return activation
 end
 
-function build_mlp_model(model_cfg)
-    act_map = activation_map()
+function normalize_type_name(type_name)
+    return replace(lowercase(String(type_name)), "_" => "", "-" => "")
+end
 
+function as_int_tuple(value, field_name::AbstractString)
+    if value isa Integer
+        return (Int(value),)
+    end
+
+    value isa AbstractVector || value isa Tuple || throw(ArgumentError("Layer configuration field '$field_name' must be an integer or an integer tuple/array."))
+    values = Tuple(Int.(collect(value)))
+    isempty(values) && throw(ArgumentError("Layer configuration field '$field_name' must not be empty."))
+    return values
+end
+
+function as_repeated_int_tuple(value, dims::Int, field_name::AbstractString)
+    if value isa Integer
+        return ntuple(_ -> Int(value), dims)
+    end
+
+    values = as_int_tuple(value, field_name)
+    length(values) == dims || throw(ArgumentError("Layer configuration field '$field_name' must have exactly $dims entries."))
+    return values
+end
+
+function dense_layer(spec, act_map)
+    haskey(spec, "in") || throw(ArgumentError("Dense layer is missing the 'in' field."))
+    haskey(spec, "out") || throw(ArgumentError("Dense layer is missing the 'out' field."))
+    return Dense(Int(spec["in"]) => Int(spec["out"]), parse_activation(spec, act_map))
+end
+
+function conv_layer(spec::AbstractDict, act_map)
+    kernel = get(spec, "kernel", get(spec, "size", nothing))
+    kernel === nothing && throw(ArgumentError("Conv layer is missing the 'kernel' field."))
+    kernel_tuple = as_int_tuple(kernel, "kernel")
+    haskey(spec, "in") || throw(ArgumentError("Conv layer is missing the 'in' field."))
+    haskey(spec, "out") || throw(ArgumentError("Conv layer is missing the 'out' field."))
+    activation = parse_activation(spec, act_map)
+    stride = as_repeated_int_tuple(get(spec, "stride", 1), length(kernel_tuple), "stride")
+    pad = as_repeated_int_tuple(get(spec, "pad", 0), length(kernel_tuple), "pad")
+    dilation = as_repeated_int_tuple(get(spec, "dilation", 1), length(kernel_tuple), "dilation")
+    groups = Int(get(spec, "groups", 1))
+    return Conv(kernel_tuple, Int(spec["in"]) => Int(spec["out"]), activation; stride=stride, pad=pad, dilation=dilation, groups=groups)
+end
+
+function reshape_layer(spec::AbstractDict)
+    shape = get(spec, "shape", get(spec, "dims", nothing))
+    shape === nothing && throw(ArgumentError("Reshape layer is missing the 'shape' field."))
+    return ReshapeLayer(collect(as_int_tuple(shape, "shape")))
+end
+
+flatten_layer(::AbstractDict) = FlattenLayer()
+
+function maxpool_layer(spec::AbstractDict)
+    size = get(spec, "size", get(spec, "kernel", nothing))
+    size === nothing && throw(ArgumentError("MaxPool layer is missing the 'size' field."))
+    size_tuple = as_int_tuple(size, "size")
+    stride = as_repeated_int_tuple(get(spec, "stride", size_tuple), length(size_tuple), "stride")
+    pad = as_repeated_int_tuple(get(spec, "pad", 0), length(size_tuple), "pad")
+    return MaxPool(size_tuple; stride=stride, pad=pad)
+end
+
+function meanpool_layer(spec::AbstractDict)
+    size = get(spec, "size", get(spec, "kernel", nothing))
+    size === nothing && throw(ArgumentError("MeanPool layer is missing the 'size' field."))
+    size_tuple = as_int_tuple(size, "size")
+    stride = as_repeated_int_tuple(get(spec, "stride", size_tuple), length(size_tuple), "stride")
+    pad = as_repeated_int_tuple(get(spec, "pad", 0), length(size_tuple), "pad")
+    return MeanPool(size_tuple; stride=stride, pad=pad)
+end
+
+function global_average_pool_layer(::AbstractDict)
+    return GlobalAveragePoolLayer()
+end
+
+function batchnorm_layer(spec::AbstractDict, act_map)
+    size = get(spec, "size", get(spec, "channels", nothing))
+    size === nothing && throw(ArgumentError("BatchNorm layer is missing the 'size' field."))
+    activation = parse_activation(spec, act_map)
+    affine = get(spec, "affine", true)
+    track_stats = get(spec, "track_stats", true)
+    return BatchNorm(Int(size), activation; affine=affine, track_stats=track_stats)
+end
+
+function dropout_layer(spec::AbstractDict)
+    rate = get(spec, "rate", get(spec, "p", nothing))
+    rate === nothing && throw(ArgumentError("Dropout layer is missing the 'rate' field."))
+    return Dropout(Float64(rate))
+end
+
+function build_layer(spec::AbstractDict, act_map)
+    haskey(spec, "type") || throw(ArgumentError("Layer specification is missing the 'type' field."))
+    layer_type = normalize_type_name(spec["type"])
+
+    if layer_type == "dense"
+        return dense_layer(spec, act_map)
+    elseif layer_type == "conv"
+        return conv_layer(spec, act_map)
+    elseif layer_type == "reshape"
+        return reshape_layer(spec)
+    elseif layer_type == "flatten"
+        return flatten_layer(spec)
+    elseif layer_type == "maxpool"
+        return maxpool_layer(spec)
+    elseif layer_type == "meanpool"
+        return meanpool_layer(spec)
+    elseif layer_type == "globalaveragepool" || layer_type == "globalmeanpool"
+        return global_average_pool_layer(spec)
+    elseif layer_type == "batchnorm"
+        return batchnorm_layer(spec, act_map)
+    elseif layer_type == "dropout"
+        return dropout_layer(spec)
+    end
+
+    throw(ArgumentError("Unsupported layer type '$layer_type'. Supported types: Dense, Conv, Reshape, Flatten, MaxPool, MeanPool, GlobalAveragePool, BatchNorm, Dropout."))
+end
+
+function build_layer_stack(layer_specs, act_map, stack_name::AbstractString)
+    layer_specs isa AbstractVector || throw(ArgumentError("Model configuration layer stack '$stack_name' must be an array of layer specifications."))
+    isempty(layer_specs) && throw(ArgumentError("Model configuration layer stack '$stack_name' must not be empty."))
+    return Chain([build_layer(layer, act_map) for layer in layer_specs]...)
+end
+
+function build_model(model_cfg)
     haskey(model_cfg, "layers") || throw(ArgumentError("Model configuration is missing the 'layers' section."))
     layers = model_cfg["layers"]
     haskey(layers, "shared") || throw(ArgumentError("Model configuration is missing the 'shared' layer stack."))
     haskey(layers, "policy") || throw(ArgumentError("Model configuration is missing the 'policy' layer stack."))
     haskey(layers, "value") || throw(ArgumentError("Model configuration is missing the 'value' layer stack."))
 
-    shared_layers = build_dense_chain(layers["shared"], act_map)
-    policy_layers = build_dense_chain(layers["policy"], act_map)
-    value_layers = build_dense_chain(layers["value"], act_map)
-
-    return AwaleModel(shared_layers, policy_layers, value_layers)
-end
-
-function build_cnn_model(model_cfg)
     act_map = activation_map()
-
-    haskey(model_cfg, "layers") || throw(ArgumentError("Model configuration is missing the 'layers' section."))
-    layers = model_cfg["layers"]
-    haskey(layers, "policy") || throw(ArgumentError("Model configuration is missing the 'policy' layer stack."))
-    haskey(layers, "value") || throw(ArgumentError("Model configuration is missing the 'value' layer stack."))
-
-    shared_layers = Chain(
-        ReshapeToCNN(),
-        Conv((3, 3), 1 => CNN_CONV1_CHANNELS, relu; pad=1),
-        Conv((3, 3), CNN_CONV1_CHANNELS => CNN_CONV2_CHANNELS, relu; pad=1),
-        FlattenBatch(),
-        Dense(CNN_CONV2_CHANNELS * 4 * 12 => CNN_SHARED_FEATURES, relu),
-    )
-    policy_layers = build_dense_chain(layers["policy"], act_map)
-    value_layers = build_dense_chain(layers["value"], act_map)
+    shared_layers = build_layer_stack(layers["shared"], act_map, "shared")
+    policy_layers = build_layer_stack(layers["policy"], act_map, "policy")
+    value_layers = build_layer_stack(layers["value"], act_map, "value")
 
     return AwaleModel(shared_layers, policy_layers, value_layers)
 end
@@ -98,14 +210,7 @@ function create_model(config_path::String=joinpath(@__DIR__, "config.toml"))
     model_cfg = config["model"]
     architecture = model_architecture(model_cfg)
     selected_cfg = select_model_config(model_cfg, architecture)
-
-    if architecture == DEFAULT_MODEL_ARCHITECTURE
-        return build_mlp_model(selected_cfg)
-    elseif architecture == "cnn"
-        return build_cnn_model(selected_cfg)
-    end
-
-    throw(ArgumentError("Unsupported model architecture '$architecture'. Only 'mlp' and 'cnn' are implemented in this checkpoint-safe slice."))
+    return build_model(selected_cfg)
 end
 
 function predict_raw(model::AwaleModel, X::AbstractMatrix{Float32})
@@ -115,16 +220,27 @@ function predict_raw(model::AwaleModel, X::AbstractMatrix{Float32})
     return logits, value
 end
 
+function with_testmode(f::Function, model::AwaleModel)
+    Flux.testmode!(model)
+    try
+        return f()
+    finally
+        Flux.trainmode!(model)
+    end
+end
+
 function predict(model::AwaleModel, s::GameState)
     s_can = canonicalize(s)
     x = reshape(vec(encode_state(s_can)), :, 1)
-    logits, value = predict_raw(model, x)
-    return vec(logits), value[1]
+    return with_testmode(() -> begin
+        logits, value = predict_raw(model, x)
+        return vec(logits), value[1]
+    end, model)
 end
 
 function predict_batch(model::AwaleModel, states::Vector{GameState})
     X = hcat([vec(encode_state(canonicalize(s))) for s in states]...)
-    return predict_raw(model, X)
+    return with_testmode(() -> predict_raw(model, X), model)
 end
 
 function atomic_write(write_fn::Function, path::AbstractString)
