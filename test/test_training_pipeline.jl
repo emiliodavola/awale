@@ -38,16 +38,15 @@ end
         @test model.policy.layers[end].σ === identity
     end
 
-    @testset "architecture selector stays checkpoint-safe" begin
-        @test fieldcount(Awale.Model.AwaleModel) == 3
-
+    @testset "config-driven shared topology accepts non-dense layers" begin
         mktempdir() do tmpdir
             config_path = joinpath(tmpdir, "config.toml")
             write(config_path, """
             [model]
-            input_dim = 48
-            encoding_shape = [4, 12]
-            architecture = "transformer"
+            architecture = "mlp"
+
+            [[model.layers.shared]]
+            type = "Flatten"
 
             [[model.layers.shared]]
             type = "Dense"
@@ -55,21 +54,9 @@ end
             out = 128
             activation = "relu"
 
-            [[model.layers.shared]]
-            type = "Dense"
-            in = 128
-            out = 128
-            activation = "relu"
-
             [[model.layers.policy]]
             type = "Dense"
             in = 128
-            out = 64
-            activation = "relu"
-
-            [[model.layers.policy]]
-            type = "Dense"
-            in = 64
             out = 6
             activation = "identity"
 
@@ -80,9 +67,77 @@ end
             activation = "tanh"
             """)
 
-            @test_throws ArgumentError Awale.create_model(config_path)
+            model = Awale.create_model(config_path)
+            logits, value = Awale.predict(model, Awale.initial_state())
+            @test length(logits) == 6
+            @test isfinite(value)
+        end
+    end
+
+    @testset "layer factory supports configured layer types" begin
+        act_map = Awale.Model.activation_map()
+
+        reshape_layer = Awale.Model.build_layer(Dict("type" => "Reshape", "shape" => [4, 12, 1]), act_map)
+        @test reshape_layer isa Awale.Model.ReshapeLayer
+        @test size(reshape_layer(rand(Float32, 48, 2))) == (4, 12, 1, 2)
+
+        flatten_layer = Awale.Model.build_layer(Dict("type" => "Flatten"), act_map)
+        @test flatten_layer isa Awale.Model.FlattenLayer
+        @test size(flatten_layer(rand(Float32, 4, 12, 1, 2))) == (48, 2)
+
+        maxpool_layer = Awale.Model.build_layer(Dict("type" => "MaxPool", "size" => [2, 2], "stride" => [2, 2]), act_map)
+        @test maxpool_layer isa Flux.MaxPool
+
+        meanpool_layer = Awale.Model.build_layer(Dict("type" => "MeanPool", "size" => [2, 2], "stride" => [2, 2]), act_map)
+        @test meanpool_layer isa Flux.MeanPool
+
+        global_pool_layer = Awale.Model.build_layer(Dict("type" => "GlobalAveragePool"), act_map)
+        @test global_pool_layer isa Awale.Model.GlobalAveragePoolLayer
+        @test size(global_pool_layer(rand(Float32, 4, 12, 2, 3))) == (1, 1, 2, 3)
+
+        batchnorm_layer = Awale.Model.build_layer(Dict("type" => "BatchNorm", "size" => 4), act_map)
+        @test batchnorm_layer isa Flux.BatchNorm
+
+        dropout_layer = Awale.Model.build_layer(Dict("type" => "Dropout", "rate" => 0.25), act_map)
+        @test dropout_layer isa Flux.Dropout
+
+        @test_throws ArgumentError Awale.Model.build_layer(Dict("type" => "Bogus"), act_map)
+    end
+
+        @testset "architecture selector stays checkpoint-safe" begin
+            @test fieldcount(Awale.Model.AwaleModel) == 3
+
+            mktempdir() do tmpdir
+                config_path = joinpath(tmpdir, "config.toml")
+                write(config_path, """
+                [model]
+                architecture = "transformer"
+
+                [model.variants.mlp]
+                [[model.variants.mlp.layers.shared]]
+                type = "Dense"
+                in = 48
+                out = 128
+                activation = "relu"
+
+                [[model.variants.mlp.layers.policy]]
+                type = "Dense"
+                in = 128
+                out = 6
+                activation = "identity"
+
+                [[model.variants.mlp.layers.value]]
+                type = "Dense"
+                in = 128
+                out = 1
+                activation = "tanh"
+                """)
+
+                @test_throws ArgumentError Awale.create_model(config_path)
+            end
         end
 
+    @testset "mlp variant remains compatible" begin
         mktempdir() do tmpdir
             config_path = joinpath(tmpdir, "config.toml")
             write(config_path, """
@@ -128,7 +183,9 @@ end
             @test typeof(model) === Awale.Model.AwaleModel
             @test model.policy.layers[end].σ === identity
         end
+    end
 
+    @testset "cnn variant builds the full shared topology from config" begin
         mktempdir() do tmpdir
             config_path = joinpath(tmpdir, "config.toml")
             write(config_path, """
@@ -138,6 +195,43 @@ end
             [model.variants.cnn]
             input_dim = 48
             encoding_shape = [4, 12]
+
+            [[model.variants.cnn.layers.shared]]
+            type = "Reshape"
+            shape = [4, 12, 1]
+
+            [[model.variants.cnn.layers.shared]]
+            type = "Conv"
+            kernel = [3, 3]
+            in = 1
+            out = 8
+            activation = "relu"
+            pad = 1
+
+            [[model.variants.cnn.layers.shared]]
+            type = "MaxPool"
+            size = [2, 2]
+            stride = [2, 2]
+
+            [[model.variants.cnn.layers.shared]]
+            type = "Conv"
+            kernel = [3, 3]
+            in = 8
+            out = 16
+            activation = "relu"
+            pad = 1
+
+            [[model.variants.cnn.layers.shared]]
+            type = "GlobalAveragePool"
+
+            [[model.variants.cnn.layers.shared]]
+            type = "Flatten"
+
+            [[model.variants.cnn.layers.shared]]
+            type = "Dense"
+            in = 16
+            out = 128
+            activation = "relu"
 
             [[model.variants.cnn.layers.policy]]
             type = "Dense"
@@ -181,7 +275,6 @@ end
             end
         end
     end
-
 
     @testset "initial model creation is deterministic for a fixed seed" begin
         train_module = Module(:TrainInitSmoke)
@@ -755,6 +848,43 @@ end
             [model.variants.cnn]
             input_dim = 48
             encoding_shape = [4, 12]
+
+            [[model.variants.cnn.layers.shared]]
+            type = "Reshape"
+            shape = [4, 12, 1]
+
+            [[model.variants.cnn.layers.shared]]
+            type = "Conv"
+            kernel = [3, 3]
+            in = 1
+            out = 8
+            activation = "relu"
+            pad = 1
+
+            [[model.variants.cnn.layers.shared]]
+            type = "MaxPool"
+            size = [2, 2]
+            stride = [2, 2]
+
+            [[model.variants.cnn.layers.shared]]
+            type = "Conv"
+            kernel = [3, 3]
+            in = 8
+            out = 16
+            activation = "relu"
+            pad = 1
+
+            [[model.variants.cnn.layers.shared]]
+            type = "GlobalAveragePool"
+
+            [[model.variants.cnn.layers.shared]]
+            type = "Flatten"
+
+            [[model.variants.cnn.layers.shared]]
+            type = "Dense"
+            in = 16
+            out = 128
+            activation = "relu"
 
             [[model.variants.cnn.layers.policy]]
             type = "Dense"

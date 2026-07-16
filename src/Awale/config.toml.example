@@ -1,13 +1,12 @@
 # Awale Model Configuration Template
 # Copy this file to src/Awale/config.toml if you want to experiment with the model architecture.
-# Switch [model].architecture to "cnn" to use the checkpoint-safe CNN trunk.
+# The complete topology for each variant lives in TOML layer specs.
+# Switch [model].architecture to "cnn" to use the convolutional variant.
 
 [model]
 architecture = "mlp"
 
 [model.variants.mlp]
-input_dim = 48
-encoding_shape = [4, 12]
 
 [[model.variants.mlp.layers.shared]]
 type = "Dense"
@@ -40,11 +39,43 @@ out = 1
 activation = "tanh"
 
 [model.variants.cnn]
-input_dim = 48
-encoding_shape = [4, 12]
 
-# The CNN path uses a fixed local reshape + convolutional trunk in src/Awale/Model.jl.
-# The head layout remains checkpoint-compatible with the MLP path.
+[[model.variants.cnn.layers.shared]]
+type = "Reshape"
+shape = [4, 12, 1]
+
+[[model.variants.cnn.layers.shared]]
+type = "Conv"
+kernel = [3, 3]
+in = 1
+out = 8
+activation = "relu"
+pad = 1
+
+[[model.variants.cnn.layers.shared]]
+type = "MaxPool"
+size = [2, 2]
+stride = [2, 2]
+
+[[model.variants.cnn.layers.shared]]
+type = "Conv"
+kernel = [3, 3]
+in = 8
+out = 16
+activation = "relu"
+pad = 1
+
+[[model.variants.cnn.layers.shared]]
+type = "GlobalAveragePool"
+
+[[model.variants.cnn.layers.shared]]
+type = "Flatten"
+
+[[model.variants.cnn.layers.shared]]
+type = "Dense"
+in = 16
+out = 128
+activation = "relu"
 
 [[model.variants.cnn.layers.policy]]
 type = "Dense"
