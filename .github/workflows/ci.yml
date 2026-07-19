@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+  pull_request:
+    branches:
+      - main
+      - dev
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Julia
+        uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.11'
+
+      - name: Cache Julia artifacts
+        uses: julia-actions/cache@v2
+
+      - name: Prepare runtime configs
+        run: |
+          cp config.toml.example config.toml
+          cp src/Awale/config.toml.example src/Awale/config.toml
+
+      - name: Instantiate
+        run: julia --project=. -e "using Pkg; Pkg.instantiate()"
+
+      - name: Run tests
+        run: julia --project=. -e "using Pkg; Pkg.test()"

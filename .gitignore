@@ -17,6 +17,27 @@
 .mcp/
 serve/artifacts/
 
+# Local progress file (not versioned)
+.progress.md
+
 # OS files
 Thumbs.db
 .DS_Store
+# Model weights and checkpoints
+*.bin
+checkpoints/
+skills-lock.json
+.agents/
+.claude/
+.pi/
+config.json
+config.toml
+src/Awale/config.toml
+*.onnx
+*.safetensors
+!model/config.json
+# Local Pi runtime state
+.atl/
+
+# Codegraph
+.codegraph/

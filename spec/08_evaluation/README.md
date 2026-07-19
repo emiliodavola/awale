@@ -1,26 +1,51 @@
-08_evaluation: Baselines, tournaments, and ELO estimation
+# 08_evaluation: Current evaluation workflow
 
-Goals
-- Provide deterministic evaluation pipelines for comparing models and baselines
-- Support ELO-style ranking and regression testing against known positions
+This spec documents the **current** evaluation workflow used by the repository.
 
-Baselines
-- Random baseline: uniform legal move selection
-- Heuristic baseline: implement small handcrafted evaluator (e.g., prefer captures, maximize immediate captures)
-- Minimax baseline: exact minimax or alpha-beta with depth-limited search and heuristic evaluation
+## Quick path
 
-Evaluation harness
-- Play round-robin tournaments with fixed RNG seeds and fixed time controls or simulation counts
-- For each pairing, run N games with alternating colors to avoid bias
-- Collect per-game metadata: seed, moves, leaf evaluations, time, model checkpoint id
+1. Use `checkpoint_arena.jl` for checkpoint-vs-checkpoint comparison.
+2. Use the release bundle / publish flow for archiving a finished run.
+3. Interpret arena results before making architecture decisions.
 
-ELO estimation
-- Use standard Elo or Glicko2 implementation with deterministic tie-breaking
-- Store per-match outcomes and update ratings offline (separate testing utility) to avoid stochastic update differences
+## Baselines currently implemented
 
-Regression tests
-- Maintain a set of canonical positions with expected best moves or scores; fail if model deviates beyond threshold
+- `RandomAgent`
+- `HeuristicAgent` (greedy immediate-capture heuristic)
+- `ModelAgent` backed by MCTS with configurable simulation budget
 
-Testable properties
-- Given same RNG and model checkpoints, evaluation match outcomes are identical
-- Elo estimation code is deterministic given same match results file
+## Checkpoint arena
+
+`checkpoint_arena.jl` is the main comparison tool for training progress.
+
+Current contract:
+- compares **numeric checkpoints in sorted consecutive order** by default
+- evaluates each pairing at `0`, `50`, and `200` simulations per side
+- alternates colors
+- uses a reproducible opening suite instead of always starting from one opening
+
+### Opening suite
+
+- fixed seed
+- openings generated from `0`, `2`, `4`, and `6` random legal plies
+- default suite size: `16` positions
+
+## Determinism expectations
+
+- Baseline and arena evaluation disable root noise for model search.
+- Reproducible openings reduce single-opening bias.
+- Results are still matchup-based empirical evidence, not Elo/Glicko ratings.
+
+## Explicit non-goals in the current repo state
+
+- No minimax baseline yet.
+- No Elo/Glicko pipeline yet.
+- No per-game artifact logging system yet.
+- No canonical-position regression suite yet.
+
+## Testing checklist
+
+- [ ] alternating-color evaluation is deterministic for fixed setup
+- [ ] opening suite is reproducible for fixed seed
+- [ ] arena ignores special checkpoints (`last`, `best`, `final`) for the default numeric chain
+- [ ] missing checkpoint directory fails gracefully

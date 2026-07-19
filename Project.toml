@@ -1,0 +1,25 @@
+name = "Awale"
+uuid = "1fca9b84-4cc5-4472-afa3-0f8c8abc1f73"
+authors = ["Emilio Dávola"]
+version = "0.1.0"
+
+[deps]
+BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+Flux = "587475ba-b771-5e3f-ad9e-33799f191a9c"
+Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+Serialization = "9e88b42a-f829-5b0c-bbe9-9e923198166b"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
+
+[compat]
+BenchmarkTools = "1.8.0"
+Flux = "0.16.10"
+Random = "1.11.0"
+Serialization = "1.11.0"
+StaticArrays = "1.9.18"
+Test = "1.11.0"
+TOML = "1"
+julia = ">= 1.8"
