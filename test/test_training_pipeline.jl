@@ -628,49 +628,104 @@ end
             @test !isfile(train_module.training_snapshot_path(26))
             @test !isfile(train_module.training_snapshot_path(27))
             @test isfile(final_checkpoint_path)
+            release_root = joinpath(train_module.checkpoint_namespace_dir(), "release")
+            release_summary_files = filter(isfile, [joinpath(release_root, entry, "release_summary.toml") for entry in readdir(release_root)])
+            @test length(release_summary_files) == 1
+            release_summary_file = only(release_summary_files)
+            @test isfile(release_summary_file)
 
-            second_output = mktemp() do path, io
-                redirect_stdout(io) do
-                    train_module.main(String[])
-                end
-                flush(io)
-                close(io)
-                read(path, String)
+            rm(release_summary_file)
+            @test !isfile(release_summary_file)
+
+            publish_root = joinpath(train_module.ROOT_DIR, "tmp_publish_selection_test")
+            rm(publish_root; recursive=true, force=true)
+            mkpath(joinpath(publish_root, "checkpoints", "mlp", "release", "20260719_120000"))
+            mkpath(joinpath(publish_root, "checkpoints", "mlp", "release", "20260720_090000"))
+            older_summary = joinpath(publish_root, "checkpoints", "mlp", "release", "20260719_120000", "release_summary.toml")
+            newer_summary = joinpath(publish_root, "checkpoints", "mlp", "release", "20260720_090000", "release_summary.toml")
+            train_module.Awale.Publication.write_release_summary(
+                older_summary;
+                commit_sha="abc123",
+                architecture="mlp",
+                release_id="20260719_120000",
+                timestamp="2026-07-19T12:00:00",
+                checkpoint_dir=joinpath("checkpoints", "mlp"),
+                runtime_config_snapshot=joinpath("checkpoints", "mlp", "log", "training_config_mlp_20260719_120000.toml"),
+                model_config_snapshot=joinpath("checkpoints", "mlp", "log", "model_config_mlp_20260719_120000.toml"),
+                training_state_path=joinpath("checkpoints", "mlp", "training_state.toml"),
+                last_checkpoint_path=joinpath("checkpoints", "mlp", "model_last.bin"),
+                best_checkpoint_path=joinpath("checkpoints", "mlp", "model_best.bin"),
+                final_checkpoint_path=joinpath("checkpoints", "mlp", "model_final.bin"),
+                last_iter=300,
+                best_selection_score=62.5,
+                baseline_win_rate=71.0,
+                final_loss=0.42,
+            )
+            train_module.Awale.Publication.write_release_summary(
+                newer_summary;
+                commit_sha="abc123",
+                architecture="mlp",
+                release_id="20260720_090000",
+                timestamp="2026-07-20T09:00:00",
+                checkpoint_dir=joinpath("checkpoints", "mlp"),
+                runtime_config_snapshot=joinpath("checkpoints", "mlp", "log", "training_config_mlp_20260720_090000.toml"),
+                model_config_snapshot=joinpath("checkpoints", "mlp", "log", "model_config_mlp_20260720_090000.toml"),
+                training_state_path=joinpath("checkpoints", "mlp", "training_state.toml"),
+                last_checkpoint_path=joinpath("checkpoints", "mlp", "model_last.bin"),
+                best_checkpoint_path=joinpath("checkpoints", "mlp", "model_best.bin"),
+                final_checkpoint_path=joinpath("checkpoints", "mlp", "model_final.bin"),
+                last_iter=301,
+                best_selection_score=63.0,
+                baseline_win_rate=72.0,
+                final_loss=0.41,
+            )
+
+            publish_module = Module(:PublishSelectionSmoke)
+            Core.eval(Main, :(PublishSelectionSmoke = $publish_module))
+            Core.eval(publish_module, :(include(path) = Base.include($(publish_module), path)))
+            Base.include(publish_module, joinpath(@__DIR__, "..", "publish_hf.jl"))
+
+            original_checkpoint_dir = publish_module.CHECKPOINT_DIR
+            try
+                publish_module.CHECKPOINT_DIR = joinpath(publish_root, "checkpoints")
+                @test Base.invokelatest(publish_module.resolve_summary_path, Dict("architecture" => "mlp")) == newer_summary
+            finally
+                publish_module.CHECKPOINT_DIR = original_checkpoint_dir
+                rm(publish_root; recursive=true, force=true)
             end
-            @test occursin("--- Entrenamiento ya completado. ---", second_output)
         end
     end
 
     @testset "entrypoint scripts load without executing main during tests" begin
         train_module = Module(:TrainSmoke2)
-        eval_module = Module(:EvalSmoke)
         play_module = Module(:PlaySmoke)
         arena_module = Module(:ArenaSmoke)
+        publish_module = Module(:PublishSmoke)
 
         Core.eval(Main, :(TrainSmoke2 = $train_module))
-        Core.eval(Main, :(EvalSmoke = $eval_module))
         Core.eval(Main, :(PlaySmoke = $play_module))
         Core.eval(Main, :(ArenaSmoke = $arena_module))
+        Core.eval(Main, :(PublishSmoke = $publish_module))
         Core.eval(train_module, :(include(path) = Base.include($(train_module), path)))
-        Core.eval(eval_module, :(include(path) = Base.include($(eval_module), path)))
         Core.eval(play_module, :(include(path) = Base.include($(play_module), path)))
         Core.eval(arena_module, :(include(path) = Base.include($(arena_module), path)))
+        Core.eval(publish_module, :(include(path) = Base.include($(publish_module), path)))
 
         mktempdir() do tmpdir
             cd(tmpdir) do
                 Base.include(train_module, joinpath(@__DIR__, "..", "train.jl"))
-                Base.include(eval_module, joinpath(@__DIR__, "..", "baseline_eval.jl"))
                 Base.include(play_module, joinpath(@__DIR__, "..", "play.jl"))
                 Base.include(arena_module, joinpath(@__DIR__, "..", "checkpoint_arena.jl"))
+                Base.include(publish_module, joinpath(@__DIR__, "..", "publish_hf.jl"))
                 model = Awale.create_model()
                 @test length(Awale.predict(model, Awale.initial_state())[1]) == 6
             end
         end
 
         @test isdefined(train_module, :main)
-        @test isdefined(eval_module, :main)
         @test isdefined(play_module, :main)
         @test isdefined(arena_module, :main)
+        @test isdefined(publish_module, :main)
         @test arena_module.checkpoint_label(5) == "iter_5"
         @test play_module.parse_args(["--agent1", "best", "--agent2", "human", "--sims", "200", "--max-turns", "120", "--seed", "42", "--deterministic"]) == Dict("agent1" => "best", "agent2" => "human", "sims" => "200", "max-turns" => "120", "seed" => "42", "deterministic" => "true")
         @test_throws ArgumentError play_module.parse_int_option("--sims", "foo")

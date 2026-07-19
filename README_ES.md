@@ -15,7 +15,6 @@ El sistema usa `config.toml` como configuración local de runtime para entrenami
 ### Scripts principales
 
 - `train.jl` — continúa o ejecuta entrenamiento y actualiza checkpoints.
-- `baseline_eval.jl` — evalúa un checkpoint contra `RandomAgent` y `HeuristicAgent`.
 - `checkpoint_arena.jl` — compara checkpoints entre sí con `0`, `50` y `200` simulaciones.
 - `play.jl` — corre una única partida de exhibición con logs de tablero y agentes configurables por CLI.
 - `scripts/benchmarks.jl` — microbenchmarks de hot paths (`encode_state`, `select_puct`, `backup`).
@@ -84,15 +83,7 @@ El entrenamiento usa tu `config.toml` local, guarda `model_last.bin`, `model_bes
 
 Los checkpoints `.bin` se tratan como artefactos locales de confianza: el flujo actual usa `Serialization` para checkpoints generados por el propio repo, no como un formato para cargar archivos arbitrarios de terceros.
 
-### 4. Evaluación rápida contra baselines
-
-```powershell
-julia --project=. .\baseline_eval.jl
-```
-
-Usalo como sanity check. Si el modelo ya domina `RandomAgent` y `HeuristicAgent`, esa evaluación deja de ser discriminante.
-
-### 5. Arena entre checkpoints
+### 4. Arena entre checkpoints
 
 ```powershell
 julia --project=. .\checkpoint_arena.jl
@@ -109,7 +100,7 @@ run_duel("best", "best"; architecture_a="mlp", architecture_b="cnn", sims=0, gam
 
 Eso mantiene el flujo por defecto intacto, pero te deja chequear `mlp(best)` contra `cnn(best)` de forma explícita.
 
-### 6. Partidas de exhibición
+### 5. Partidas de exhibición
 
 `play.jl` está pensado para una sola partida visible en terminal. Permite elegir ambos agentes por línea de comando: `human`, `best`, `last`, `final` o un path explícito a un checkpoint. Los alias `best/last/final` resuelven primero el namespace de la arquitectura activa (`checkpoints/<arquitectura>/...`) y después caen al path legacy del root si hace falta. También acepta `--sims` para controlar cuántas simulaciones usa cada agente IA, `--max-turns` para limitar la duración de la partida, `--seed` para reproducir una exhibición estocástica y `--deterministic` para desactivar esa variación.
 
@@ -126,7 +117,7 @@ julia --project=. .\play.jl --agent1 best --agent2 final --deterministic
 
 La interfaz muestra el humano abajo, la fila superior en orden inverso para respetar la siembra antihoraria, las capturadas de ambos jugadores y un banner claro por turno.
 
-### 7. Microbenchmarks
+### 6. Microbenchmarks
 
 ```powershell
 julia --project=. .\scripts\benchmarks.jl
