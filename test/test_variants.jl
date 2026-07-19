@@ -9,7 +9,8 @@ end
 
 @testset "rule variants" begin
     @testset "forced feeding requires a feeding move when one exists" begin
-        cfg = Awale.GameConfig(forced_feeding=:require_feed)
+        @test Awale.GameConfig().forced_feeding == :require_feed
+        cfg = Awale.GameConfig()
         state = variant_state((4, 4, 4, 4, 4, 4, 0, 0, 0, 0, 0, 0), cfg)
         actions = Awale.legal_actions(state)
         @test 6 in actions

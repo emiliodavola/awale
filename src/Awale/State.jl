@@ -16,7 +16,7 @@ struct GameConfig
 end
 
 GameConfig(; starvation::Symbol=:allow_capture, grand_slam::Symbol=:allow, repetition::Symbol=:draw_on_repeat,
-forced_feeding::Symbol=:allow_move_feeding) =
+forced_feeding::Symbol=:require_feed) =
     GameConfig(starvation, grand_slam, repetition, forced_feeding)
 
 """
@@ -115,6 +115,7 @@ function deserialize_state(bytes::Vector{UInt8})::GameState
     starvation = get(STARVATION_MAP_REV, b1, :allow_capture)
     grand_slam = get(GRANDSLAM_MAP_REV, b2, :allow)
     repetition = get(REPETITION_MAP_REV, b3, :draw_on_repeat)
+    # Preserve legacy serialized states that used the older allow_move_feeding default.
     forced_feeding = get(FEEDING_MAP_REV, b4, :allow_move_feeding)
     cfg = GameConfig(starvation, grand_slam, repetition, forced_feeding)
     state = GameState(board, to_move, captured, UInt64(0), cfg, Set{UInt64}())

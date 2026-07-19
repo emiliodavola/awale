@@ -4,7 +4,7 @@ using .Awale
 using .Awale.State: GameState, initial_state, GameConfig
 using .Awale.Env: is_terminal, transition, legal_actions
 using .Awale.Model: load_model
-using .Awale.Evaluation: ModelAgent, result_from_terminal_state, select_action
+using .Awale.Evaluation: ModelAgent, result_from_cutoff_state, result_from_terminal_state, select_action
 using .Awale.MCTS: MCTSSearch, search
 using .Awale.Utils: architecture_scoped_candidates, first_existing_path
 using Random
@@ -157,13 +157,7 @@ function final_result(s::GameState)::Int
         return result_from_terminal_state(s)
     end
 
-    if s.captured[1] > s.captured[2]
-        return 1
-    elseif s.captured[2] > s.captured[1]
-        return -1
-    end
-
-    return 0
+    return result_from_cutoff_state(s)
 end
 
 function print_help()

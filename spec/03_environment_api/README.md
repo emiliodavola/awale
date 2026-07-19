@@ -1,6 +1,6 @@
 # 03_environment_api: API contracts and transition semantics
 
-This spec documents the **current** environment contract implemented in `src/Awale/Env.jl`.
+This spec documents the environment API contract for the canonical Awalé ruleset used by `src/Awale/Env.jl`.
 
 ## Quick path
 
@@ -16,7 +16,7 @@ This spec documents the **current** environment contract implemented in `src/Awa
   - Pure transition. Returns a new immutable state.
   - Throws an error when `action ∉ legal_actions(s)`.
 - `is_terminal(s::GameState)::Bool`
-  - Terminal on capture threshold, repetition policy, or no legal moves.
+  - Terminal when the canonical ruleset reaches a capture-threshold win, a 24–24 draw, a no-feed ending, or a repetition outcome resolved by the configured policy.
 - `reward(s::GameState)::Float32`
   - Terminal reward in `{-1.0, 0.0, +1.0}` from the **current-player perspective**.
 - `local_to_global(action::Int, s::GameState)::Int`
@@ -32,11 +32,31 @@ This spec documents the **current** environment contract implemented in `src/Awa
 6. Recompute `history_hash` from the canonicalized next state.
 7. Extend `history_hashes` with the previous state's hash.
 
+## Terminal-state contract
+
+The environment must treat the following situations as terminal under the canonical ruleset:
+
+1. **Capture threshold win**
+   - A player wins immediately when their captured total reaches **25 or more** seeds.
+
+2. **24–24 draw**
+   - If both players have captured **24 seeds**, the game is a draw.
+
+3. **No-feed terminal state**
+   - If the player to move has no seeds on their side and the opponent has no legal move that can feed them, the game ends.
+   - Each player captures the seeds remaining on their own side before the final result is computed.
+
+4. **Repetition / cycle handling**
+   - Repetition is detected from the canonical history hash.
+   - `repetition = :draw_on_repeat` resolves the game as a draw.
+   - `repetition = :score_diff` resolves the game by final captured totals.
+   - `repetition = :revert` is not terminal; the caller is responsible for revert semantics.
+
 ## Variant rules currently modeled
 
 | Area | Current contract |
 |---|---|
-| Forced feeding | `forced_feeding = :require_feed` filters `legal_actions` down to feeding moves when such moves exist |
+| Forced feeding | `GameConfig()` defaults `forced_feeding` to `:require_feed`, which filters `legal_actions` down to feeding moves when such moves exist |
 | Starvation prevention | `starvation = :prevent_starvation` filters out starving moves when non-starving alternatives exist |
 | Repetition | `:draw_on_repeat`, `:revert`, `:score_diff` |
 
@@ -46,6 +66,7 @@ This spec documents the **current** environment contract implemented in `src/Awa
 - Deterministic output for the same state and action.
 - Seed conservation must hold after every legal transition.
 - Illegal actions must fail loudly.
+- Terminal detection must agree with the rules documented in `spec/01_game_rules/README.md`.
 
 ## Testing checklist
 
@@ -53,3 +74,4 @@ This spec documents the **current** environment contract implemented in `src/Awa
 - [ ] `transition` preserves seed conservation
 - [ ] illegal actions throw
 - [ ] starvation / forced-feeding variants filter actions as expected
+- [ ] capture-threshold, 24–24 draw, no-feed, and repetition terminal states are covered

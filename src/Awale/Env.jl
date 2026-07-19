@@ -11,6 +11,37 @@ opponent_player(p::Int8) = p == Int8(1) ? Int8(2) : Int8(1)
 same_side(i::Int, player::Int)::Bool =
     (player == 1 && 1 <= i <= 6) || (player == 2 && 7 <= i <= 12)
 
+function side_seed_totals(s::GameState)::Tuple{Int,Int}
+    p1_total = Int(s.captured[1])
+    p2_total = Int(s.captured[2])
+
+    for i in 1:6
+        p1_total += Int(s.board[i])
+    end
+    for i in 7:12
+        p2_total += Int(s.board[i])
+    end
+
+    return p1_total, p2_total
+end
+
+function terminal_score_totals(s::GameState)::Tuple{Int,Int}
+    if isempty(legal_actions(s))
+        return side_seed_totals(s)
+    end
+    return Int(s.captured[1]), Int(s.captured[2])
+end
+
+function score_to_perspective_reward(s::GameState, p1_score::Int, p2_score::Int)::Float32
+    if p1_score > p2_score
+        return (s.to_move == 1) ? 1.0f0 : -1.0f0
+    elseif p2_score > p1_score
+        return (s.to_move == 2) ? 1.0f0 : -1.0f0
+    else
+        return 0.0f0
+    end
+end
+
 function is_starved(s::GameState, p::Integer)::Bool
     start = (p == 1) ? 1 : 7
     return all(i -> s.board[i] == 0, start:(start+5))
@@ -119,8 +150,11 @@ function transition(s::GameState, action::Int)::GameState
 end
 
 function is_terminal(s::GameState)::Bool
-    # 1. Win Condition (Grand Slam)
-    if s.captured[1] == 24 || s.captured[2] == 24
+    # 1. Capture threshold / draw.
+    if Int(s.captured[1]) >= 25 || Int(s.captured[2]) >= 25
+        return true
+    end
+    if Int(s.captured[1]) == 24 && Int(s.captured[2]) == 24
         return true
     end
 
@@ -129,7 +163,7 @@ function is_terminal(s::GameState)::Bool
         return s.config.repetition != :revert
     end
 
-    # 3. End of Game (No legal moves)
+    # 3. End of game (no legal moves / no-feed resolution).
     if isempty(legal_actions(s))
         return true
     end
@@ -138,19 +172,16 @@ function is_terminal(s::GameState)::Bool
 end
 
 function reward(s::GameState)::Float32
-    if s.history_hash in s.history_hashes && s.config.repetition == :draw_on_repeat
-        return 0.0f0
+    if s.history_hash in s.history_hashes
+        if s.config.repetition == :draw_on_repeat
+            return 0.0f0
+        elseif s.config.repetition == :score_diff
+            return score_to_perspective_reward(s, Int(s.captured[1]), Int(s.captured[2]))
+        end
     end
 
-    p1_score = s.captured[1]
-    p2_score = s.captured[2]
-    if p1_score > p2_score
-        return (s.to_move == 1) ? 1.0f0 : -1.0f0
-    elseif p2_score > p1_score
-        return (s.to_move == 2) ? 1.0f0 : -1.0f0
-    else
-        return 0.0f0
-    end
+    p1_score, p2_score = terminal_score_totals(s)
+    return score_to_perspective_reward(s, p1_score, p2_score)
 end
 
 end # module

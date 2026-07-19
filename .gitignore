@@ -38,3 +38,6 @@ src/Awale/config.toml
 !model/config.json
 # Local Pi runtime state
 .atl/
+
+# Codegraph
+.codegraph/

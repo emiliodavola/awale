@@ -13,6 +13,26 @@ function result_from_terminal_state(state::GameState)::Int
     return p1_perspective_reward > 0 ? 1 : p1_perspective_reward < 0 ? -1 : 0
 end
 
+function result_from_cutoff_state(state::GameState)::Int
+    if state.captured[1] > state.captured[2]
+        return 1
+    elseif state.captured[2] > state.captured[1]
+        return -1
+    end
+
+    return 0
+end
+
+# Preserve the legacy 2-value destructuring contract while exposing cutoff explicitly as a field.
+struct MatchOutcome
+    result::Int
+    turns_played::Int
+    cutoff::Bool
+end
+
+Base.iterate(outcome::MatchOutcome) = (outcome.result, 1)
+Base.iterate(outcome::MatchOutcome, state::Int) = state == 1 ? (outcome.turns_played, 2) : nothing
+
 struct RandomAgent end
 
 function select_action(::RandomAgent, s::GameState, rng=Random.default_rng())
@@ -67,7 +87,9 @@ function play_match_from_state(initial_state::GameState, agent_p1, agent_p2, rng
         turns_played += 1
     end
 
-    return result_from_terminal_state(state), turns_played
+    cutoff = !is_terminal(state)
+    result = cutoff ? result_from_cutoff_state(state) : result_from_terminal_state(state)
+    return MatchOutcome(result, turns_played, cutoff)
 end
 
 function play_match(agent_p1, agent_p2, config::GameConfig=GameConfig(), rng=Random.default_rng(); max_turns::Int=1000)

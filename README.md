@@ -1,130 +1,132 @@
-# Awale — Specification-driven Awale (Oware) RL (Julia)
+# Awale
 
-## Resumen breve
+## Brief summary
 
-Proyecto de investigación para desarrollar un sistema AlphaZero-like para Awale (Oware/Awari) en Julia. Enfoque: especificaciones formales → contratos → pruebas de propiedades → implementación. `spec/` documenta los contratos actuales del sistema y `src/` contiene la implementación.
+Research project for building an AlphaZero-like Awale system in Julia. The workflow is specification-first: formal contracts → tests → implementation. The canonical game rules live in `spec/01_game_rules/README.md` and `spec/03_environment_api/README.md`; `src/` contains the implementation. A Spanish snapshot of the original README is kept in `README_ES.md`.
 
-## 🚀 Estado actual
+## Current status
 
-El proyecto ya tiene una pipeline funcional de entrenamiento/evaluación, pero sigue siendo un repositorio de investigación. La regla principal sigue siendo: **no sacar conclusiones arquitectónicas antes de validar bien la calidad de la señal de entrenamiento**.
+The project already has a working training/evaluation pipeline, but it is still a research repository. The main rule remains: **do not draw architectural conclusions before validating the quality of the training signal**.
 
-### Configuración del proyecto
+### Project configuration
 
-El sistema usa `config.toml` como configuración local de runtime para entrenamiento, evaluación y juego. La plantilla versionada vive en `config.toml.example`; copiála a `config.toml` y editala localmente. Las semillas de inicialización/bootstrapping del entrenamiento y límites compartidos como `training.max_turns` se controlan desde ahí, así que la reproducibilidad y los topes de runtime no quedan hardcodeados. La arquitectura del modelo vive en `src/Awale/config.toml` de forma local/no versionada; la plantilla versionada vive en `src/Awale/config.toml.example`. Los checkpoints y logs de entrenamiento se agrupan por arquitectura bajo `checkpoints/<arquitectura>/` para separar corridas de MLP, CNN y futuras variantes.
+The system uses `config.toml` as the local runtime configuration for training, evaluation, and play. The versioned template lives in `config.toml.example`; copy it to `config.toml` and edit it locally. Training bootstrap seeds and shared runtime limits such as `training.max_turns` are controlled there, so reproducibility and runtime limits are not hardcoded.
 
-### Scripts principales
+The model architecture lives in a local, unversioned `src/Awale/config.toml`; the versioned template lives in `src/Awale/config.toml.example`. Checkpoints and logs are grouped by architecture under `checkpoints/<architecture>/` so MLP, CNN, and future variants stay separated.
 
-- `train.jl` — continúa o ejecuta entrenamiento y actualiza checkpoints.
-- `baseline_eval.jl` — evalúa un checkpoint contra `RandomAgent` y `HeuristicAgent`.
-- `checkpoint_arena.jl` — compara checkpoints entre sí con `0`, `50` y `200` simulaciones.
-- `play.jl` — corre una única partida de exhibición con logs de tablero y agentes configurables por CLI.
-- `scripts/benchmarks.jl` — microbenchmarks de hot paths (`encode_state`, `select_puct`, `backup`).
+### Main scripts
 
-## Hoja de ruta experimental
+- `train.jl` — continue or run training and update checkpoints.
+- `baseline_eval.jl` — evaluate a checkpoint against `RandomAgent` and `HeuristicAgent`.
+- `checkpoint_arena.jl` — compare checkpoints against each other with `0`, `50`, and `200` simulations.
+- `play.jl` — run a single showcase game with board logs and CLI-configurable agents.
+- `scripts/benchmarks.jl` — microbenchmarks for hot paths (`encode_state`, `select_puct`, `backup`).
 
-### Regla central
+## Experimental roadmap
 
-> **No optimizar la arquitectura de red antes de validar la representación de estado y el pipeline de entrenamiento.**
+### Core rule
 
-### Orden de trabajo recomendado
+> **Do not optimize the network architecture before validating the state representation and training pipeline.**
+
+### Recommended order of work
 
 1. **State encoding**
-   - usar una representación estructurada `(C, 12)`
-   - evitar feature engineering excesivo
+   - use a structured `(C, 12)` representation
+   - avoid excessive feature engineering
 2. **Strong MLP baseline**
-   - establecer una baseline fuerte antes de introducir inductive bias más complejo
+   - establish a strong baseline before introducing more complex inductive bias
 3. **Self-play + MCTS scaling**
-   - comparar siempre con el mismo presupuesto de búsqueda y self-play
+   - compare everything with the same search and self-play budget
 4. **Architecture benchmarking**
-   - recién después comparar MLP contra variantes más complejas como ResNet1D
+   - only after that compare the MLP with more complex variants such as ResNet1D
 
-### Métricas que importan
+### Metrics that matter
 
 - **Sample efficiency**
 - **Win rate / arena performance**
 - **Policy entropy**
 - **Value stability**
-- **Elo relativo**
+- **Relative Elo**
 
-## Siguientes pasos recomendados
+## Suggested next steps
 
-1. Seguir con benchmarks entre checkpoints de la pipeline nueva.
-2. Medir cuánto aporta la red sola (`0 sims`) versus red + MCTS (`50/200 sims`).
-3. Recién después decidir si hace falta cambiar arquitectura.
+1. Continue benchmarking checkpoints from the new pipeline.
+2. Measure how much the network alone contributes (`0 sims`) versus network + MCTS (`50/200 sims`).
+3. Only then decide whether the architecture needs to change.
 
-## Cómo usar el repositorio
+## How to use the repository
 
-Recomendado: usar siempre el entorno del proyecto de Julia.
+Recommended: always use the project’s Julia environment.
 
-### 1. Instanciar dependencias
+### 1. Instantiate dependencies
 
 ```powershell
 julia --project=. -e "using Pkg; Pkg.instantiate()"
 ```
 
-### 2. Correr la suite de tests
+### 2. Run the test suite
 
 ```powershell
 julia --project=. -e "using Pkg; Pkg.test()"
 ```
 
-Alternativa local directa:
+Alternative direct local run:
 
 ```powershell
 julia --project=. test/runtests.jl
 ```
 
-### 3. Entrenar
+### 3. Train
 
 ```powershell
 julia --project=. .\train.jl
 ```
 
-El entrenamiento usa tu `config.toml` local, guarda `model_last.bin`, `model_best.bin`, `model_final.bin` y snapshots `model_iter_N.bin` bajo `checkpoints/<arquitectura>/` solo en hitos automáticos: iteración 1, potencias de 2 y múltiplos de `checkpoint_every`. El log de entrenamiento también se guarda bajo `checkpoints/<arquitectura>/log/` e incluye la arquitectura activa en el nombre y en el contenido copiado.
+Training uses your local `config.toml`, saves `model_last.bin`, `model_best.bin`, `model_final.bin`, and `model_iter_N.bin` snapshots under `checkpoints/<architecture>/` at automatic milestones: iteration 1, powers of 2, and multiples of `checkpoint_every`. The training log is also saved under `checkpoints/<architecture>/log/` and includes the active architecture in the file name and copied content.
 
-Los checkpoints `.bin` se tratan como artefactos locales de confianza: el flujo actual usa `Serialization` para checkpoints generados por el propio repo, no como un formato para cargar archivos arbitrarios de terceros.
+The `.bin` checkpoints are treated as trusted local artifacts: the current flow uses `Serialization` for checkpoints generated by this repo, not as a format for loading arbitrary third-party files.
 
-### 4. Evaluación rápida contra baselines
+### 4. Quick evaluation against baselines
 
 ```powershell
 julia --project=. .\baseline_eval.jl
 ```
 
-Usalo como sanity check. Si el modelo ya domina `RandomAgent` y `HeuristicAgent`, esa evaluación deja de ser discriminante.
+Use it as a sanity check. If the model already dominates `RandomAgent` and `HeuristicAgent`, this evaluation stops being very discriminative.
 
-### 5. Arena entre checkpoints
+### 5. Arena between checkpoints
 
 ```powershell
 julia --project=. .\checkpoint_arena.jl
 ```
 
-Usalo para responder si hay progreso real entre checkpoints de la misma pipeline. Hoy es la evaluación más útil para distinguir señal de ruido porque compara checkpoints consecutivos sobre una opening suite reproducible. El arena resuelve checkpoints del namespace de la arquitectura activa y conserva fallback legacy al root para artefactos viejos.
+Use it to answer whether there is real progress between checkpoints from the same pipeline. Today it is the most useful evaluation for separating signal from noise because it compares consecutive checkpoints over a reproducible opening suite. The arena resolves checkpoints from the active architecture namespace and keeps a legacy fallback to the repository root for older artifacts.
 
-Si querés comparar arquitecturas distintas en la misma corrida, usá la API interna `run_duel` con selectores explícitos por arquitectura. Ejemplo en Julia:
+If you want to compare different architectures in the same run, use the internal `run_duel` API with explicit architecture selectors. Example in Julia:
 
 ```julia
 include("checkpoint_arena.jl")
 run_duel("best", "best"; architecture_a="mlp", architecture_b="cnn", sims=0, games=2)
 ```
 
-Eso mantiene el flujo por defecto intacto, pero te deja chequear `mlp(best)` contra `cnn(best)` de forma explícita.
+That keeps the default flow intact while letting you compare `mlp(best)` against `cnn(best)` explicitly.
 
-### 6. Partidas de exhibición
+### 6. Showcase games
 
-`play.jl` está pensado para una sola partida visible en terminal. Permite elegir ambos agentes por línea de comando: `human`, `best`, `last`, `final` o un path explícito a un checkpoint. Los alias `best/last/final` resuelven primero el namespace de la arquitectura activa (`checkpoints/<arquitectura>/...`) y después caen al path legacy del root si hace falta. También acepta `--sims` para controlar cuántas simulaciones usa cada agente IA, `--max-turns` para limitar la duración de la partida, `--seed` para reproducir una exhibición estocástica y `--deterministic` para desactivar esa variación.
+`play.jl` is intended for a single visible game in the terminal. It lets you choose both agents from the CLI: `human`, `best`, `last`, `final`, or an explicit checkpoint path. The `best/last/final` aliases resolve first against the active architecture namespace (`checkpoints/<architecture>/...`) and then fall back to the legacy root path if needed. It also accepts `--sims` to control how many simulations each AI agent uses, `--max-turns` to limit game length, `--seed` to reproduce a stochastic showcase, and `--deterministic` to disable that variation.
 
-Ejemplos:
+Examples:
 
 ```powershell
 julia --project=. .\play.jl --agent1 best --agent2 human
 julia --project=. .\play.jl --agent1 best --agent2 final
-julia --project=. .\play.jl --agent1 checkpoints\<arquitectura>\model_best.bin --agent2 human
+julia --project=. .\play.jl --agent1 checkpoints\<architecture>\model_best.bin --agent2 human
 julia --project=. .\play.jl --agent1 best --agent2 final --sims 200 --max-turns 120
 julia --project=. .\play.jl --agent1 best --agent2 final --seed 42
 julia --project=. .\play.jl --agent1 best --agent2 final --deterministic
 ```
 
-La interfaz muestra el humano abajo, la fila superior en orden inverso para respetar la siembra antihoraria, las capturadas de ambos jugadores y un banner claro por turno.
+The interface shows the human at the bottom, the upper row reversed to respect counterclockwise sowing, both players’ captured seeds, and a clear turn banner.
 
 ### 7. Microbenchmarks
 
@@ -132,18 +134,18 @@ La interfaz muestra el humano abajo, la fila superior en orden inverso para resp
 julia --project=. .\scripts\benchmarks.jl
 ```
 
-Usalo solo para medir hot paths y comparar impacto de cambios de performance.
+Use this only to measure hot paths and compare the impact of performance changes.
 
-## Estructura clave
+## Key structure
 
-- `spec/`: contratos actuales del sistema y notas de diseño
-- `src/`: código fuente (módulos: `Awale/State`, `Awale/Env`, `Awale/MCTS`, `Awale/Model`, `Awale/Training`, `Awale/Utils`)
-- `test/`: pruebas unitarias, invariantes y regresión
-- `checkpoints/`: modelos y estado de entrenamiento, agrupados por arquitectura
-- `scripts/`: entrypoints auxiliares como microbenchmarks
-- `.github/`: CI
+- `spec/` — current system contracts and design notes
+- `src/` — source code (modules: `Awale/State`, `Awale/Env`, `Awale/MCTS`, `Awale/Model`, `Awale/Training`, `Awale/Utils`)
+- `test/` — unit tests, invariants, and regression coverage
+- `checkpoints/` — models and training state, grouped by architecture
+- `scripts/` — auxiliary entry points such as microbenchmarks
+- `.github/` — CI
 
-## Flujo de trabajo (gitflow)
+## Gitflow
 
-- Ramas permanentes: `main` (estable), `dev` (integración)
-- Crear feature branches desde `dev`: `feature/<nombre>`
+- Permanent branches: `main` (stable), `dev` (integration)
+- Create feature branches from `dev`: `feature/<name>`

@@ -3,7 +3,6 @@ module Model
 using TOML
 using Flux
 using Serialization
-using Statistics: mean
 using ..State: GameState, canonicalize, encode_state
 
 export create_model, predict, predict_batch, predict_inference, predict_batch_inference, predict_raw, encode_state, save_model, load_model
@@ -33,7 +32,16 @@ function global_average_pool_dims(x)
     return ntuple(identity, ndims(x) - 2)
 end
 
-(layer::GlobalAveragePoolLayer)(x) = mean(x; dims=global_average_pool_dims(x))
+function global_average_pool(x)
+    dims = global_average_pool_dims(x)
+    denom = one(eltype(x))
+    for d in dims
+        denom *= size(x, d)
+    end
+    return sum(x; dims=dims) ./ denom
+end
+
+(layer::GlobalAveragePoolLayer)(x) = global_average_pool(x)
 
 function model_architecture(model_cfg)::String
     architecture = get(model_cfg, "architecture", "mlp")
