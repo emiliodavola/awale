@@ -9,6 +9,7 @@ using ..Utils: architecture_slug
 export release_id_slug,
        release_timestamp,
        release_summary_path,
+       latest_release_summary_path,
        release_bundle_dir,
        runtime_config_snapshot_path,
        model_config_snapshot_path,
@@ -67,8 +68,23 @@ function release_namespace_dir(checkpoint_dir::AbstractString, architecture::Abs
     return joinpath(String(checkpoint_dir), architecture_slug(architecture))
 end
 
-function release_summary_path(checkpoint_dir::AbstractString, architecture::AbstractString)::String
-    return joinpath(release_namespace_dir(checkpoint_dir, architecture), RELEASE_SUMMARY_FILE)
+function release_summary_path(checkpoint_dir::AbstractString, architecture::AbstractString, release_id::AbstractString)::String
+    return joinpath(release_namespace_dir(checkpoint_dir, architecture), RELEASE_SUBDIR, String(release_id), RELEASE_SUMMARY_FILE)
+end
+
+function release_bundle_summary_path(checkpoint_dir::AbstractString, release_id::AbstractString)::String
+    return joinpath(String(checkpoint_dir), RELEASE_SUBDIR, String(release_id), RELEASE_SUMMARY_FILE)
+end
+
+function latest_release_summary_path(checkpoint_dir::AbstractString, architecture::AbstractString)::Union{String, Nothing}
+    release_root = joinpath(release_namespace_dir(checkpoint_dir, architecture), RELEASE_SUBDIR)
+    isdir(release_root) || return nothing
+
+    release_ids = filter(release_id -> isdir(joinpath(release_root, release_id)) && isfile(joinpath(release_root, release_id, RELEASE_SUMMARY_FILE)), readdir(release_root))
+    isempty(release_ids) && return nothing
+
+    sort!(release_ids)
+    return joinpath(release_root, release_ids[end], RELEASE_SUMMARY_FILE)
 end
 
 function release_bundle_dir(checkpoint_dir::AbstractString, architecture::AbstractString, release_id::AbstractString)::String
@@ -195,7 +211,7 @@ function bundle_artifact_specs(summary::Dict{String, Any}, root_dir::AbstractStr
     architecture = architecture_slug(String(run["architecture"]))
     release_id = String(run["release_id"])
     summary_source = resolve_repo_path(root_dir, summary_path)
-    expected_summary_source = joinpath(checkpoint_dir, RELEASE_SUMMARY_FILE)
+    expected_summary_source = release_bundle_summary_path(checkpoint_dir, release_id)
     summary_source == expected_summary_source || throw(ArgumentError("Release summary path does not match expected layout: $summary_source"))
 
     expected_paths = expected_release_artifact_paths(checkpoint_dir, architecture, release_id)
@@ -268,6 +284,7 @@ end
 
 function copy_artifact!(source::AbstractString, destination::AbstractString)
     isfile(source) || throw(ArgumentError("Missing release artifact: $source"))
+    abspath(source) == abspath(destination) && return destination
     mkpath(dirname(destination))
     cp(source, destination; force=true)
     return destination
@@ -297,17 +314,18 @@ function stage_release_bundle(summary_path::AbstractString; root_dir::AbstractSt
     planned = plan_release_bundle(summary_path; root_dir=root_dir)
     bundle_dir = planned.bundle_dir
     summary = planned.summary
+    manifest_path = joinpath(bundle_dir, MANIFEST_FILE)
 
-    if isdir(bundle_dir) && !isempty(readdir(bundle_dir))
-        isfile(joinpath(bundle_dir, MANIFEST_FILE)) || throw(ArgumentError("Release bundle already exists without a manifest: $bundle_dir"))
+    if isfile(manifest_path)
         return bundle_dir
     end
+
+    mkpath(bundle_dir)
 
     for (bundle_relpath, source_path) in planned.artifact_specs
         copy_artifact!(source_path, joinpath(bundle_dir, split(bundle_relpath, '/')...))
     end
 
-    manifest_path = joinpath(bundle_dir, MANIFEST_FILE)
     atomic_write(manifest_path) do io
         TOML.print(io, bundle_manifest(summary, planned.artifact_specs))
     end

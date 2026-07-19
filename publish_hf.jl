@@ -2,7 +2,8 @@ const ROOT_DIR = @__DIR__
 include(joinpath(ROOT_DIR, "src", "Awale.jl"))
 
 using .Awale
-using .Awale.Publication: default_repo_path, plan_release_bundle, publish_release_bundle, read_release_summary, release_summary_path, resolve_repo_path, stage_release_bundle
+using .Awale.Publication: default_repo_path, latest_release_summary_path, plan_release_bundle, publish_release_bundle, read_release_summary, resolve_repo_path, stage_release_bundle
+using .Awale.Utils: architecture_slug
 using TOML
 
 config = TOML.parsefile(joinpath(ROOT_DIR, "config.toml"))
@@ -69,7 +70,11 @@ function resolve_summary_path(opts::Dict{String, String})::String
     end
 
     architecture = haskey(opts, "architecture") ? opts["architecture"] : model_architecture_name()
-    return release_summary_path(CHECKPOINT_DIR, architecture)
+    checkpoint_root = resolve_path(CHECKPOINT_DIR)
+    summary_path = latest_release_summary_path(checkpoint_root, architecture)
+    release_root = joinpath(checkpoint_root, architecture_slug(architecture), "release")
+    summary_path === nothing && throw(ArgumentError("No release summaries found for architecture '$architecture' under $release_root"))
+    return summary_path
 end
 
 function summarize_release(summary, bundle_dir::String)

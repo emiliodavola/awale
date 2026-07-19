@@ -103,7 +103,9 @@ julia --project=. .\publish_hf.jl --stage
 julia --project=. .\publish_hf.jl --publish --repo-id your-namespace/awale-results
 ```
 
-The bundle is architecture-scoped under `checkpoints/<architecture>/release/<release_id>/` and includes:
+The bundle is architecture-scoped under `checkpoints/<architecture>/release/<release_id>/`, and each run keeps its own `release_summary.toml` there so older runs stay discoverable. `publish_hf.jl` defaults to the newest run summary for that architecture.
+
+It includes:
 
 - `model_final.bin`, `model_best.bin`, `model_last.bin`
 - `training_state.toml`

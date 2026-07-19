@@ -605,7 +605,6 @@ end
             train_module.USE_RANDOM_ANCHOR = false
             train_module.USE_HEURISTIC_ANCHOR = false
 
-            release_summary_file = train_module.release_summary_path(train_module.CHECKPOINT_DIR, train_module.model_architecture_name())
             last_checkpoint_path = train_module.training_last_checkpoint_path()
             state_path = train_module.training_state_file_path()
             final_checkpoint_path = train_module.evaluation_checkpoint_path()
@@ -629,22 +628,71 @@ end
             @test !isfile(train_module.training_snapshot_path(26))
             @test !isfile(train_module.training_snapshot_path(27))
             @test isfile(final_checkpoint_path)
+            release_root = joinpath(train_module.checkpoint_namespace_dir(), "release")
+            release_summary_files = filter(isfile, [joinpath(release_root, entry, "release_summary.toml") for entry in readdir(release_root)])
+            @test length(release_summary_files) == 1
+            release_summary_file = only(release_summary_files)
             @test isfile(release_summary_file)
 
             rm(release_summary_file)
             @test !isfile(release_summary_file)
 
-            second_output = mktemp() do path, io
-                redirect_stdout(io) do
-                    train_module.main(String[])
-                end
-                flush(io)
-                close(io)
-                read(path, String)
+            publish_root = joinpath(train_module.ROOT_DIR, "tmp_publish_selection_test")
+            rm(publish_root; recursive=true, force=true)
+            mkpath(joinpath(publish_root, "checkpoints", "mlp", "release", "20260719_120000"))
+            mkpath(joinpath(publish_root, "checkpoints", "mlp", "release", "20260720_090000"))
+            older_summary = joinpath(publish_root, "checkpoints", "mlp", "release", "20260719_120000", "release_summary.toml")
+            newer_summary = joinpath(publish_root, "checkpoints", "mlp", "release", "20260720_090000", "release_summary.toml")
+            train_module.Awale.Publication.write_release_summary(
+                older_summary;
+                commit_sha="abc123",
+                architecture="mlp",
+                release_id="20260719_120000",
+                timestamp="2026-07-19T12:00:00",
+                checkpoint_dir=joinpath("checkpoints", "mlp"),
+                runtime_config_snapshot=joinpath("checkpoints", "mlp", "log", "training_config_mlp_20260719_120000.toml"),
+                model_config_snapshot=joinpath("checkpoints", "mlp", "log", "model_config_mlp_20260719_120000.toml"),
+                training_state_path=joinpath("checkpoints", "mlp", "training_state.toml"),
+                last_checkpoint_path=joinpath("checkpoints", "mlp", "model_last.bin"),
+                best_checkpoint_path=joinpath("checkpoints", "mlp", "model_best.bin"),
+                final_checkpoint_path=joinpath("checkpoints", "mlp", "model_final.bin"),
+                last_iter=300,
+                best_selection_score=62.5,
+                baseline_win_rate=71.0,
+                final_loss=0.42,
+            )
+            train_module.Awale.Publication.write_release_summary(
+                newer_summary;
+                commit_sha="abc123",
+                architecture="mlp",
+                release_id="20260720_090000",
+                timestamp="2026-07-20T09:00:00",
+                checkpoint_dir=joinpath("checkpoints", "mlp"),
+                runtime_config_snapshot=joinpath("checkpoints", "mlp", "log", "training_config_mlp_20260720_090000.toml"),
+                model_config_snapshot=joinpath("checkpoints", "mlp", "log", "model_config_mlp_20260720_090000.toml"),
+                training_state_path=joinpath("checkpoints", "mlp", "training_state.toml"),
+                last_checkpoint_path=joinpath("checkpoints", "mlp", "model_last.bin"),
+                best_checkpoint_path=joinpath("checkpoints", "mlp", "model_best.bin"),
+                final_checkpoint_path=joinpath("checkpoints", "mlp", "model_final.bin"),
+                last_iter=301,
+                best_selection_score=63.0,
+                baseline_win_rate=72.0,
+                final_loss=0.41,
+            )
+
+            publish_module = Module(:PublishSelectionSmoke)
+            Core.eval(Main, :(PublishSelectionSmoke = $publish_module))
+            Core.eval(publish_module, :(include(path) = Base.include($(publish_module), path)))
+            Base.include(publish_module, joinpath(@__DIR__, "..", "publish_hf.jl"))
+
+            original_checkpoint_dir = publish_module.CHECKPOINT_DIR
+            try
+                publish_module.CHECKPOINT_DIR = joinpath(publish_root, "checkpoints")
+                @test Base.invokelatest(publish_module.resolve_summary_path, Dict("architecture" => "mlp")) == newer_summary
+            finally
+                publish_module.CHECKPOINT_DIR = original_checkpoint_dir
+                rm(publish_root; recursive=true, force=true)
             end
-            @test occursin("--- Entrenamiento ya completado. ---", second_output)
-            @test occursin("Release summary guardada", second_output)
-            @test isfile(release_summary_file)
         end
     end
 

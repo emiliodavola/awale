@@ -357,7 +357,7 @@ function main(args::Vector{String}=Base.ARGS)
     release_id = release_id_slug()
     commit_sha = current_commit_sha()
     runtime_config_snapshot, model_config_snapshot = snapshot_run_configs(training_log_dir(), model_architecture_name(), release_id)
-    release_summary_file = release_summary_path(CHECKPOINT_DIR, model_architecture_name())
+    release_summary_file = release_summary_path(CHECKPOINT_DIR, model_architecture_name(), release_id)
 
     rng = Random.MersenneTwister(BOOTSTRAP_RNG_SEED)
 println("Bootstrap RNG seed: $BOOTSTRAP_RNG_SEED | max_turns: $MAX_TURNS")
