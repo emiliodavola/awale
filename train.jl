@@ -7,6 +7,7 @@ using .Awale.Model: save_model, load_model, atomic_write
 using .Awale.Evaluation: HeuristicAgent, RandomAgent, ModelAgent, evaluate_agents, evaluate_agents_on_openings, generate_opening_suite
 using .Awale.MCTS: MCTSSearch
 using .Awale.ReplayBuffers: ReplayBuffer
+using .Awale.Publication: release_summary_path, release_id_slug, release_timestamp, runtime_config_snapshot_path, model_config_snapshot_path, write_release_summary
 using .Awale.Utils: architecture_slug, architecture_scoped_path, architecture_scoped_candidates, first_existing_path
 using Random
 using TOML
@@ -81,6 +82,10 @@ function training_log_file_path()
     timestamp = Dates.format(Dates.now(), "yyyy_mm_dd_HH_mm")
     architecture = architecture_slug(model_architecture_name())
     return joinpath(training_log_dir(), "training_config_$(architecture)_$timestamp.toml")
+end
+
+function current_commit_sha()
+    return readchomp(`git -C $ROOT_DIR rev-parse HEAD`)
 end
 
 function training_snapshot_path(iter::Int)
@@ -236,19 +241,64 @@ function maybe_promote_best!(model, best_selection_score_ref, selection)
     return true
 end
 
-function save_run_config(log_dir::String, architecture::AbstractString)
-    timestamp = Dates.format(Dates.now(), "yyyy_mm_dd_HH_mm")
-    arch = architecture_slug(architecture)
-    log_file = joinpath(log_dir, "training_config_$(arch)_$timestamp.toml")
-    println("Registrando configuración para arquitectura $arch en: $log_file")
+function write_release_summary_file(
+    release_summary_file::AbstractString;
+    commit_sha::AbstractString,
+    architecture::AbstractString,
+    release_id::AbstractString,
+    checkpoint_dir::AbstractString,
+    runtime_config_snapshot::AbstractString,
+    model_config_snapshot::AbstractString,
+    training_state_path::AbstractString,
+    last_checkpoint_path::AbstractString,
+    best_checkpoint_path::AbstractString,
+    final_checkpoint_path::AbstractString,
+    last_iter::Int,
+    best_selection_score::Real,
+    baseline_win_rate::Real,
+    final_loss::Real,
+    selection_current_best_rate::Union{Nothing, Real}=nothing,
+    selection_promoted::Union{Nothing, Bool}=nothing,
+)
+    write_release_summary(
+        release_summary_file;
+        commit_sha=commit_sha,
+        architecture=architecture,
+        release_id=release_id,
+        timestamp=release_timestamp(),
+        checkpoint_dir=checkpoint_dir,
+        runtime_config_snapshot=runtime_config_snapshot,
+        model_config_snapshot=model_config_snapshot,
+        training_state_path=training_state_path,
+        last_checkpoint_path=last_checkpoint_path,
+        best_checkpoint_path=best_checkpoint_path,
+        final_checkpoint_path=final_checkpoint_path,
+        last_iter=last_iter,
+        best_selection_score=best_selection_score,
+        baseline_win_rate=baseline_win_rate,
+        final_loss=final_loss,
+        selection_current_best_rate=selection_current_best_rate,
+        selection_promoted=selection_promoted,
+    )
+    println(" 📄 Release summary guardada en: $release_summary_file")
+    return release_summary_file
+end
 
-    try
-        data = read(joinpath(ROOT_DIR, "config.toml"), String)
-        header = "# training_architecture = $arch\n# checkpoint_namespace = $(checkpoint_namespace_dir())\n"
-        write(log_file, header * data)
-    catch err
-        println("Error al copiar configuración: $err")
-    end
+function snapshot_run_configs(log_dir::String, architecture::AbstractString, release_id::AbstractString)
+    arch = architecture_slug(architecture)
+    runtime_config_path = runtime_config_snapshot_path(log_dir, arch, release_id)
+    model_config_path = model_config_snapshot_path(log_dir, arch, release_id)
+    model_config_source = abspath(ROOT_DIR, String(get(training_cfg, "model_config_path", joinpath("src", "Awale", "config.toml"))))
+
+    println("Registrando configuración para arquitectura $arch en: $runtime_config_path")
+    println("Registrando configuración de modelo para arquitectura $arch en: $model_config_path")
+
+    runtime_data = read(joinpath(ROOT_DIR, "config.toml"), String)
+    runtime_header = "# training_architecture = $arch\n# checkpoint_namespace = $(checkpoint_namespace_dir())\n"
+    write(runtime_config_path, runtime_header * runtime_data)
+    write(model_config_path, read(model_config_source, String))
+
+    return runtime_config_path, model_config_path
 end
 
 function maybe_resume_from_legacy_checkpoint!(model_ref, start_iter_ref)
@@ -304,7 +354,10 @@ function main(args::Vector{String}=Base.ARGS)
     println("Arquitectura activa: $(architecture_slug(model_architecture_name()))")
     println("Checkpoint namespace: $checkpoint_root")
 
-    save_run_config(training_log_dir(), model_architecture_name())
+    release_id = release_id_slug()
+    commit_sha = current_commit_sha()
+    runtime_config_snapshot, model_config_snapshot = snapshot_run_configs(training_log_dir(), model_architecture_name(), release_id)
+    release_summary_file = release_summary_path(CHECKPOINT_DIR, model_architecture_name())
 
     rng = Random.MersenneTwister(BOOTSTRAP_RNG_SEED)
 println("Bootstrap RNG seed: $BOOTSTRAP_RNG_SEED | max_turns: $MAX_TURNS")
@@ -312,6 +365,11 @@ println("Bootstrap RNG seed: $BOOTSTRAP_RNG_SEED | max_turns: $MAX_TURNS")
     start_iter = Ref(1)
     best_selection_score = Ref(-1.0)
     model = Ref(create_initial_model())
+    last_loss = Ref(Float64(NaN))
+    last_baseline_win_rate = Ref(Float64(NaN))
+    last_selection_current_best_rate = Ref{Union{Nothing, Float64}}(nothing)
+    last_selection_promoted = Ref{Union{Nothing, Bool}}(nothing)
+    last_completed_iter = Ref(0)
 
     last_checkpoint_path = training_last_checkpoint_existing_path()
     training_state_path = training_state_existing_path()
@@ -337,10 +395,12 @@ println("Bootstrap RNG seed: $BOOTSTRAP_RNG_SEED | max_turns: $MAX_TURNS")
                 model[] = load_model(last_checkpoint_path)
             end
             start_iter[] = NUM_ITERATIONS + 1
+            last_completed_iter[] = last_iter
         end
     elseif checkpoint_path !== nothing
         println("¡Modelo final detectado! El entrenamiento ya fue completado.")
         model[] = load_model(checkpoint_path)
+        last_completed_iter[] = NUM_ITERATIONS
         start_iter[] = NUM_ITERATIONS + 1
     else
         maybe_resume_from_legacy_checkpoint!(model, start_iter)
@@ -373,15 +433,19 @@ println("Bootstrap RNG seed: $BOOTSTRAP_RNG_SEED | max_turns: $MAX_TURNS")
             )
             println("  Loss promedio: $(round(loss, digits=4))")
             println("  Replay buffer: $(length(replay_buffer)) muestras")
+            last_loss[] = Float64(loss)
 
             agent_model = ModelAgent(evaluation_mcts, SIMS_PER_EVAL)
             results = evaluate_agents(agent_model, agent_random, EVAL_GAMES, Awale.GameConfig(), rng)
             win_rate = (results.wins / EVAL_GAMES) * 100
             println("  Baseline vs Random @ $(SIMS_PER_EVAL) sims: $(round(win_rate, digits=2))% (W:$(results.wins) L:$(results.losses) D:$(results.draws))")
+            last_baseline_win_rate[] = Float64(win_rate)
 
             save_model(model[], training_last_checkpoint_path())
 
             selection = evaluate_best_promotion(model[])
+            last_selection_current_best_rate[] = selection.current_best_rate === nothing ? nothing : Float64(selection.current_best_rate)
+            last_selection_promoted[] = selection.promoted
             println("  Best-selection target: $(BEST_TARGET_SIMS) sims, $(BEST_PROMOTION_GAMES) games, $(selection.openings) openings, threshold $(BEST_PROMOTION_THRESHOLD)%")
             if selection.current_best_results === nothing
                 println("  Candidate vs current best: bootstrap (no current best checkpoint)")
@@ -407,14 +471,40 @@ println("Bootstrap RNG seed: $BOOTSTRAP_RNG_SEED | max_turns: $MAX_TURNS")
             end
 
             write_training_state(training_state_file_path(), iter, best_selection_score[])
+            last_completed_iter[] = iter
         end
 
         save_model(model[], evaluation_checkpoint_path())
         println("\n--- Entrenamiento Finalizado ---")
         println(" Modelo final guardado en: $(evaluation_checkpoint_path())")
+
     else
         println("--- Entrenamiento ya completado. ---")
     end
+
+    if start_iter[] > NUM_ITERATIONS && last_completed_iter[] == 0
+        last_completed_iter[] = NUM_ITERATIONS
+    end
+
+    write_release_summary_file(
+        release_summary_file;
+        commit_sha=commit_sha,
+        architecture=model_architecture_name(),
+        release_id=release_id,
+        checkpoint_dir=checkpoint_namespace_dir(),
+        runtime_config_snapshot=runtime_config_snapshot,
+        model_config_snapshot=model_config_snapshot,
+        training_state_path=training_state_file_path(),
+        last_checkpoint_path=training_last_checkpoint_path(),
+        best_checkpoint_path=training_best_checkpoint_path(),
+        final_checkpoint_path=evaluation_checkpoint_path(),
+        last_iter=last_completed_iter[],
+        best_selection_score=best_selection_score[],
+        baseline_win_rate=last_baseline_win_rate[],
+        final_loss=last_loss[],
+        selection_current_best_rate=last_selection_current_best_rate[],
+        selection_promoted=last_selection_promoted[],
+    )
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__

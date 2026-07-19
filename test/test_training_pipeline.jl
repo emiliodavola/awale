@@ -605,6 +605,7 @@ end
             train_module.USE_RANDOM_ANCHOR = false
             train_module.USE_HEURISTIC_ANCHOR = false
 
+            release_summary_file = train_module.release_summary_path(train_module.CHECKPOINT_DIR, train_module.model_architecture_name())
             last_checkpoint_path = train_module.training_last_checkpoint_path()
             state_path = train_module.training_state_file_path()
             final_checkpoint_path = train_module.evaluation_checkpoint_path()
