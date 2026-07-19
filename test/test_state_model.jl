@@ -20,4 +20,9 @@ using .Awale
     @test Awale.serialize_state(s2) == bytes
     @test Awale.validate_invariants(s2)
     @test !Awale.is_terminal(s2)
+
+    legacy = Awale.initial_state(Awale.GameConfig(forced_feeding=:allow_move_feeding))
+    legacy_bytes = Awale.serialize_state(legacy)
+    legacy_s2 = Awale.deserialize_state(legacy_bytes)
+    @test legacy_s2.config.forced_feeding == :allow_move_feeding
 end

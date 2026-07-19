@@ -56,7 +56,7 @@ The environment must treat the following situations as terminal under the canoni
 
 | Area | Current contract |
 |---|---|
-| Forced feeding | `forced_feeding = :require_feed` filters `legal_actions` down to feeding moves when such moves exist |
+| Forced feeding | `GameConfig()` defaults `forced_feeding` to `:require_feed`, which filters `legal_actions` down to feeding moves when such moves exist |
 | Starvation prevention | `starvation = :prevent_starvation` filters out starving moves when non-starving alternatives exist |
 | Repetition | `:draw_on_repeat`, `:revert`, `:score_diff` |
 

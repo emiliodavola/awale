@@ -21,7 +21,7 @@ Type contracts (Julia style)
     starvation::Symbol  # :allow_capture | :prevent_starvation
     grand_slam::Symbol  # :allow | :forbid | :special
     repetition::Symbol  # :draw_on_repeat | :revert | :score_diff
-    forced_feeding::Symbol  # :allow_move_feeding | :require_feed
+    forced_feeding::Symbol  # :allow_move_feeding | :require_feed (default: :require_feed)
   end
 
 - immutable struct GameState

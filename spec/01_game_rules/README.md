@@ -21,6 +21,7 @@ The active ruleset must be explicit in `GameConfig`.
 - `grand_slam`: `:allow` | `:forbid` | `:special`
 - `repetition`: `:draw_on_repeat` | `:revert` | `:score_diff`
 - `forced_feeding`: `:allow_move_feeding` | `:require_feed`
+  - Default: `GameConfig()` uses `:require_feed`.
 
 ## Terminal-state contract
 
