@@ -4,8 +4,8 @@ This spec documents the **current** evaluation workflow used by the repository.
 
 ## Quick path
 
-1. Use `baseline_eval.jl` for quick sanity checks.
-2. Use `checkpoint_arena.jl` for checkpoint-vs-checkpoint comparison.
+1. Use `checkpoint_arena.jl` for checkpoint-vs-checkpoint comparison.
+2. Use the release bundle / publish flow for archiving a finished run.
 3. Interpret arena results before making architecture decisions.
 
 ## Baselines currently implemented
@@ -13,15 +13,6 @@ This spec documents the **current** evaluation workflow used by the repository.
 - `RandomAgent`
 - `HeuristicAgent` (greedy immediate-capture heuristic)
 - `ModelAgent` backed by MCTS with configurable simulation budget
-
-## Baseline evaluation script
-
-`baseline_eval.jl` currently evaluates:
-- Model vs `RandomAgent`
-- Model vs `HeuristicAgent`
-- `HeuristicAgent` vs `RandomAgent`
-
-This is a sanity check, not the main research signal once the model surpasses weak baselines.
 
 ## Checkpoint arena
 

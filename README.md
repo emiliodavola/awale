@@ -17,7 +17,7 @@ The model architecture lives in a local, unversioned `src/Awale/config.toml`; th
 ### Main scripts
 
 - `train.jl` — continue or run training and update checkpoints.
-- `baseline_eval.jl` — evaluate a checkpoint against `RandomAgent` and `HeuristicAgent`.
+- `publish_hf.jl` — assemble a release bundle and optionally upload it to Hugging Face.
 - `checkpoint_arena.jl` — compare checkpoints against each other with `0`, `50`, and `200` simulations.
 - `play.jl` — run a single showcase game with board logs and CLI-configurable agents.
 - `scripts/benchmarks.jl` — microbenchmarks for hot paths (`encode_state`, `select_puct`, `backup`).

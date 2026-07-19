@@ -629,6 +629,10 @@ end
             @test !isfile(train_module.training_snapshot_path(26))
             @test !isfile(train_module.training_snapshot_path(27))
             @test isfile(final_checkpoint_path)
+            @test isfile(release_summary_file)
+
+            rm(release_summary_file)
+            @test !isfile(release_summary_file)
 
             second_output = mktemp() do path, io
                 redirect_stdout(io) do
@@ -639,39 +643,41 @@ end
                 read(path, String)
             end
             @test occursin("--- Entrenamiento ya completado. ---", second_output)
+            @test occursin("Release summary guardada", second_output)
+            @test isfile(release_summary_file)
         end
     end
 
     @testset "entrypoint scripts load without executing main during tests" begin
         train_module = Module(:TrainSmoke2)
-        eval_module = Module(:EvalSmoke)
         play_module = Module(:PlaySmoke)
         arena_module = Module(:ArenaSmoke)
+        publish_module = Module(:PublishSmoke)
 
         Core.eval(Main, :(TrainSmoke2 = $train_module))
-        Core.eval(Main, :(EvalSmoke = $eval_module))
         Core.eval(Main, :(PlaySmoke = $play_module))
         Core.eval(Main, :(ArenaSmoke = $arena_module))
+        Core.eval(Main, :(PublishSmoke = $publish_module))
         Core.eval(train_module, :(include(path) = Base.include($(train_module), path)))
-        Core.eval(eval_module, :(include(path) = Base.include($(eval_module), path)))
         Core.eval(play_module, :(include(path) = Base.include($(play_module), path)))
         Core.eval(arena_module, :(include(path) = Base.include($(arena_module), path)))
+        Core.eval(publish_module, :(include(path) = Base.include($(publish_module), path)))
 
         mktempdir() do tmpdir
             cd(tmpdir) do
                 Base.include(train_module, joinpath(@__DIR__, "..", "train.jl"))
-                Base.include(eval_module, joinpath(@__DIR__, "..", "baseline_eval.jl"))
                 Base.include(play_module, joinpath(@__DIR__, "..", "play.jl"))
                 Base.include(arena_module, joinpath(@__DIR__, "..", "checkpoint_arena.jl"))
+                Base.include(publish_module, joinpath(@__DIR__, "..", "publish_hf.jl"))
                 model = Awale.create_model()
                 @test length(Awale.predict(model, Awale.initial_state())[1]) == 6
             end
         end
 
         @test isdefined(train_module, :main)
-        @test isdefined(eval_module, :main)
         @test isdefined(play_module, :main)
         @test isdefined(arena_module, :main)
+        @test isdefined(publish_module, :main)
         @test arena_module.checkpoint_label(5) == "iter_5"
         @test play_module.parse_args(["--agent1", "best", "--agent2", "human", "--sims", "200", "--max-turns", "120", "--seed", "42", "--deterministic"]) == Dict("agent1" => "best", "agent2" => "human", "sims" => "200", "max-turns" => "120", "seed" => "42", "deterministic" => "true")
         @test_throws ArgumentError play_module.parse_int_option("--sims", "foo")
