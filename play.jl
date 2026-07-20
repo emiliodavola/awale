@@ -74,8 +74,8 @@ end
 
 function print_legend(bottom_player::Int)
     top_player = bottom_player == 1 ? 2 : 1
-    println("Leyenda: P$bottom_player abajo, P$top_player arriba. La siembra es antihoraria.")
-    println("         La fila superior se muestra en orden inverso para seguir el recorrido de las semillas.")
+    println("Legend: P$bottom_player at the bottom, P$top_player at the top. Sowing is counterclockwise.")
+    println("         The top row is shown in reverse order to follow the seed path.")
 end
 
 function print_board(s::GameState; bottom_player::Int=1)
@@ -94,19 +94,19 @@ function print_board(s::GameState; bottom_player::Int=1)
     end
 
     println()
-    println("                 P$(top_player) capturadas: $(Int(s.captured[top_player]))")
+    println("                 P$(top_player) captured: $(Int(s.captured[top_player]))")
     println("      " * join((format_cell(label, seeds) for (label, seeds) in zip(top_labels, top_row)), " "))
     println("      " * join((format_cell(label, seeds) for (label, seeds) in zip(bottom_labels, bottom_row)), " "))
-    println("                 P$(bottom_player) capturadas: $(Int(s.captured[bottom_player]))")
-    println("                 Turno: P$(Int(s.to_move))")
+    println("                 P$(bottom_player) captured: $(Int(s.captured[bottom_player]))")
+    println("                 Turn: P$(Int(s.to_move))")
 end
 
 function prompt_human_action(s::GameState)
     legal = legal_actions(s)
-    println("Jugadas legales: $(join(legal, ", "))")
+    println("Legal moves: $(join(legal, ", "))")
 
     while true
-        print("Elegí una casilla [1-6], 'h' para ayuda o 'q' para salir: ")
+        print("Choose a pit [1-6], 'h' for help, or 'q' to quit: ")
         flush(stdout)
         raw = read_human_choice()
 
@@ -119,8 +119,8 @@ function prompt_human_action(s::GameState)
         end
 
         if raw in ("h", "help", "?")
-            println("Ingresá un número entre 1 y 6 que esté en las jugadas legales.")
-            println("'q' abandona la partida.")
+            println("Enter a number between 1 and 6 that appears in the legal moves list.")
+            println("'q' leaves the game.")
             continue
         end
 
@@ -134,7 +134,7 @@ function prompt_human_action(s::GameState)
             return action
         end
 
-        println("[!] Jugada inválida. Probá de nuevo.")
+        println("[!] Invalid move. Try again.")
     end
 end
 
@@ -145,7 +145,7 @@ function resolve_agent(spec::AbstractString, sims::Int)
     end
 
     path = resolve_checkpoint_path(spec)
-    isfile(path) || throw(ArgumentError("No se encontró el checkpoint para '$spec' en '$path'"))
+    isfile(path) || throw(ArgumentError("Checkpoint not found for '$spec' at '$path'"))
 
     model = load_model(path)
     mcts = MCTSSearch(model, C_PUCT, Dict{UInt64, Tuple{Float32, Int64}}())
@@ -192,15 +192,15 @@ function parse_args(args::Vector{String})
         arg = args[i]
         if arg in ("-h", "--help")
             return nothing
-        elseif arg in ("--agent1", "--agent2", "--sims", "--max-turns", "--seed")
-            i == length(args) && throw(ArgumentError("Falta valor para $arg"))
+    elseif arg in ("--agent1", "--agent2", "--sims", "--max-turns", "--seed")
+            i == length(args) && throw(ArgumentError("Missing value for $arg"))
             opts[replace(arg, "--" => "")] = args[i + 1]
             i += 2
         elseif arg == "--deterministic"
             opts["deterministic"] = "true"
             i += 1
         else
-            throw(ArgumentError("Argumento desconocido: $arg"))
+            throw(ArgumentError("Unknown argument: $arg"))
         end
     end
 
@@ -209,7 +209,7 @@ end
 
 function parse_int_option(name::AbstractString, value::AbstractString)::Int
     parsed = tryparse(Int, strip(value))
-    parsed === nothing && throw(ArgumentError("$name debe ser un entero, recibí: '$value'"))
+    parsed === nothing && throw(ArgumentError("$name must be an integer, got: '$value'"))
     return parsed
 end
 
@@ -219,7 +219,7 @@ end
 
 function print_turn_banner(turn_no::Int, player::Int, label::String)
     println()
-    println("=== TURNO $turn_no | P$player | agente: $label ===")
+    println("=== TURN $turn_no | P$player | agent: $label ===")
 end
 
 function read_human_choice()::String
@@ -234,8 +234,8 @@ function read_human_choice()::String
 end
 
 function print_turn_action(player::Int, action::Int)
-    println("P$player mueve desde la casilla $action")
-    println("Jugada: $action")
+    println("P$player moves from pit $action")
+    println("Move: $action")
 end
 
 function select_exhibition_action(agent, state::GameState, rng; stochastic::Bool)
@@ -256,9 +256,9 @@ function play_match_with_logs(agent1, label1::String, agent2, label2::String; co
     state = initial_state(config)
     turns_played = 0
 
-    println("--- Partida de exhibición ---")
-    println("Modo: $(stochastic ? "stochastic" : "deterministic")")
-    println("=== ESTADO INICIAL ===")
+    println("--- Exhibition match ---")
+    println("Mode: $(stochastic ? "stochastic" : "deterministic")")
+    println("=== INITIAL STATE ===")
     print_legend(bottom_player)
     print_board(state; bottom_player=bottom_player)
     print_turn_separator()
@@ -282,7 +282,7 @@ function play_match_with_logs(agent1, label1::String, agent2, label2::String; co
     catch err
         if err isa InterruptException
             println()
-            println("[!] Partida abortada por el usuario.")
+            println("[!] Game aborted by the user.")
             return nothing
         end
         rethrow()
@@ -290,18 +290,18 @@ function play_match_with_logs(agent1, label1::String, agent2, label2::String; co
 
     result = final_result(state)
     println()
-    println("--- Fin de la partida ---")
+    println("--- End of match ---")
     if result == 1
-        println("🏆 GANADOR: P1")
+        println("🏆 WINNER: P1")
     elseif result == -1
-        println("🏆 GANADOR: P2")
+        println("🏆 WINNER: P2")
     else
-        println("🤝 RESULTADO: Empate")
+        println("🤝 RESULT: Draw")
     end
-    println("Duración: $turns_played turnos")
+    println("Duration: $turns_played turns")
 
     if turns_played >= max_turns && !is_terminal(state)
-        println("[WARN] La partida terminó por max_turns antes del cierre natural.")
+        println("[WARN] The match reached max_turns before a natural finish.")
     end
 
     return result
@@ -311,7 +311,7 @@ function main(args::Vector{String}=Base.ARGS)
     opts = parse_args(args)
     opts === nothing && return print_help()
 
-    println("--- Visualizador de Juego de Awale ---")
+    println("--- Awale game viewer ---")
 
     sims = parse_int_option("--sims", opts["sims"])
     max_turns = parse_int_option("--max-turns", opts["max-turns"])
@@ -322,7 +322,7 @@ function main(args::Vector{String}=Base.ARGS)
     agent2, label2 = resolve_agent(opts["agent2"], sims)
 
     bottom_player = agent1 isa HumanAgent ? 1 : agent2 isa HumanAgent ? 2 : 1
-    println("Agentes: P1=$label1 | P2=$label2")
+    println("Agents: P1=$label1 | P2=$label2")
 
     play_match_with_logs(agent1, label1, agent2, label2; max_turns=max_turns, bottom_player=bottom_player, rng=exhibition_rng, stochastic=stochastic)
 end
