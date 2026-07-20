@@ -192,7 +192,7 @@ function parse_args(args::Vector{String})
         arg = args[i]
         if arg in ("-h", "--help")
             return nothing
-    elseif arg in ("--agent1", "--agent2", "--sims", "--max-turns", "--seed")
+        elseif arg in ("--agent1", "--agent2", "--sims", "--max-turns", "--seed")
             i == length(args) && throw(ArgumentError("Missing value for $arg"))
             opts[replace(arg, "--" => "")] = args[i + 1]
             i += 2

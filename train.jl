@@ -414,7 +414,7 @@ function main(args::Vector{String}=Base.ARGS)
 
     if start_iter[] <= NUM_ITERATIONS
         for iter in start_iter[]:NUM_ITERATIONS
-        println("\nIteration $iter / $NUM_ITERATIONS")
+            println("\nIteration $iter / $NUM_ITERATIONS")
 
             loss = run_training_iteration(
                 training_mcts,

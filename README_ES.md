@@ -8,6 +8,8 @@ Proyecto de investigación para construir un sistema Awale estilo AlphaZero en J
 
 El proyecto ya tiene una pipeline funcional de entrenamiento/evaluación, pero sigue siendo un repositorio de investigación. La regla principal sigue siendo: **no sacar conclusiones arquitectónicas antes de validar la calidad de la señal de entrenamiento**.
 
+Nota: este archivo es una traducción/mirror en español de `README.md`; algunos términos técnicos pueden mantenerse en inglés cuando forman parte de la convención del repositorio.
+
 ### Configuración del proyecto
 
 El sistema usa `config.toml` como configuración local de runtime para entrenamiento, evaluación y juego. La plantilla versionada vive en `config.toml.example`; cópiela en `config.toml` y edítela localmente. Las semillas de arranque del entrenamiento y límites compartidos como `training.max_turns` se controlan allí, así que la reproducibilidad y los límites de runtime no quedan hardcodeados.

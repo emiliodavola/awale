@@ -428,6 +428,7 @@ function publish_release_bundle(summary_path::AbstractString, repo_id::AbstractS
     run_info = summary["run"]
     remote_path = repo_path === nothing ? default_repo_path(String(run_info["architecture"]), String(run_info["release_id"])) : String(repo_path)
     run(hf_upload_command(repo_id, bundle_dir, remote_path))
+    # Upload the rendered model card separately so it lands at the Hugging Face repo root.
     run(publish_model_card_command(repo_id, bundle_dir))
     return bundle_dir
 end
