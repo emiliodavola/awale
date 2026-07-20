@@ -29,6 +29,7 @@ const ARTIFACT_SUBDIR = "artifacts"
 const MANIFEST_FILE = "manifest.toml"
 const RELEASE_SUMMARY_FILE = "release_summary.toml"
 const MODEL_CARD_FILE = "README.md"
+const MODEL_CARD_GENERATOR_VERSION = 1
 const PUBLIC_MODEL_FILE_EXT = ".f32"
 const DEFAULT_ROOT_DIR = abspath(joinpath(@__DIR__, "..", ".."))
 
@@ -83,6 +84,48 @@ end
 
 function release_model_card_path(bundle_dir::AbstractString)::String
     return joinpath(String(bundle_dir), MODEL_CARD_FILE)
+end
+
+function write_model_card_front_matter(io::IO, summary::Dict{String, Any})
+    sections = release_summary_sections(summary)
+    release_id = String(sections.run["release_id"])
+    best_selection_score = sections.metrics["best_selection_score"]
+    baseline_win_rate = sections.metrics["baseline_win_rate"]
+    final_loss = sections.metrics["final_loss"]
+    selection_current_best_rate = get(sections.metrics, "selection_current_best_rate", nothing)
+
+    println(io, "---")
+    println(io, "license: mit")
+    println(io, "library_name: flux")
+    println(io, "tags:")
+    for tag in ("julia", "flux", "awale", "reinforcement-learning", "mcts")
+        println(io, "  - $tag")
+    end
+    println(io, "model-index:")
+    println(io, "  - name: Awale release $release_id")
+    println(io, "    results:")
+    println(io, "      - task:")
+    println(io, "          type: custom")
+    println(io, "          name: Awale self-play evaluation")
+    println(io, "        dataset:")
+    println(io, "          name: Awale release summary")
+    println(io, "        metrics:")
+    println(io, "          - name: Best selection score")
+    println(io, "            type: best_selection_score")
+    println(io, "            value: $best_selection_score")
+    println(io, "          - name: Baseline win rate")
+    println(io, "            type: baseline_win_rate")
+    println(io, "            value: $baseline_win_rate")
+    println(io, "          - name: Final loss")
+    println(io, "            type: final_loss")
+    println(io, "            value: $final_loss")
+    if selection_current_best_rate !== nothing
+        println(io, "          - name: Selection current best rate")
+        println(io, "            type: selection_current_best_rate")
+        println(io, "            value: $selection_current_best_rate")
+    end
+    println(io, "---")
+    println(io)
 end
 
 function public_release_bundle_dir(checkpoint_dir::AbstractString, architecture::AbstractString, release_id::AbstractString)::String
@@ -163,6 +206,10 @@ function dict_entries_match(actual::AbstractDict, expected::AbstractDict)::Bool
         get(actual, key, nothing) == value || return false
     end
     return true
+end
+
+function release_summary_sections(summary::Dict{String, Any})
+    return (run=summary["run"], paths=summary["paths"], metrics=summary["metrics"])
 end
 
 function latest_release_summary_path(checkpoint_dir::AbstractString, architecture::AbstractString)::Union{String, Nothing}
@@ -271,43 +318,59 @@ function read_release_summary(path::AbstractString)::Dict{String, Any}
 end
 
 function release_model_card(summary::Dict{String, Any}, artifact_specs::Dict{String, String}; bundle_kind::AbstractString, model_export_format::AbstractString)::String
-    run = summary["run"]
-    paths = summary["paths"]
-    metrics = summary["metrics"]
+    sections = release_summary_sections(summary)
+    release_id = String(sections.run["release_id"])
+    architecture = String(sections.run["architecture"])
+    commit_sha = String(sections.run["commit_sha"])
+    timestamp = String(sections.run["timestamp"])
+    checkpoint_dir = String(sections.run["checkpoint_dir"])
+    runtime_config_snapshot = String(sections.paths["runtime_config_snapshot"])
+    model_config_snapshot = String(sections.paths["model_config_snapshot"])
+    training_state_path = String(sections.paths["training_state_path"])
+    last_checkpoint_path = String(sections.paths["last_checkpoint_path"])
+    best_checkpoint_path = String(sections.paths["best_checkpoint_path"])
+    final_checkpoint_path = String(sections.paths["final_checkpoint_path"])
+    last_iter = sections.metrics["last_iter"]
+    best_selection_score = sections.metrics["best_selection_score"]
+    baseline_win_rate = sections.metrics["baseline_win_rate"]
+    final_loss = sections.metrics["final_loss"]
+    selection_current_best_rate = get(sections.metrics, "selection_current_best_rate", nothing)
+    selection_promoted = get(sections.metrics, "selection_promoted", nothing)
 
     io = IOBuffer()
-    println(io, "# Awale release $(run["release_id"]) model card")
+    write_model_card_front_matter(io, summary)
+    println(io, "# Awale release $release_id model card")
     println(io)
-    println(io, "This Hugging Face model card was generated from the release summary for a finished Awale training run.")
+    println(io, "This model card documents an Awale policy/value network implemented in Julia with Flux.jl. The YAML metadata above comes from the release summary and should be treated as the source of truth for this bundle.")
     println(io)
     println(io, "## Release metadata")
-    println(io, "- Architecture: $(run["architecture"])")
-    println(io, "- Release ID: $(run["release_id"])")
-    println(io, "- Commit SHA: $(run["commit_sha"])")
-    println(io, "- Timestamp: $(run["timestamp"])")
-    println(io, "- Checkpoint dir: $(run["checkpoint_dir"])")
+    println(io, "- Architecture: $architecture")
+    println(io, "- Release ID: $release_id")
+    println(io, "- Commit SHA: $commit_sha")
+    println(io, "- Timestamp: $timestamp")
+    println(io, "- Checkpoint dir: $checkpoint_dir")
     println(io, "- Bundle kind: $(bundle_kind)")
     println(io, "- Model export format: $(model_export_format)")
     println(io)
     println(io, "## Metrics")
-    println(io, "- Last iteration: $(metrics["last_iter"])")
-    println(io, "- Best selection score: $(metrics["best_selection_score"])")
-    println(io, "- Baseline win rate: $(metrics["baseline_win_rate"])")
-    println(io, "- Final loss: $(metrics["final_loss"])")
-    if haskey(metrics, "selection_current_best_rate")
-        println(io, "- Selection current best rate: $(metrics["selection_current_best_rate"])")
+    println(io, "- Last iteration: $last_iter")
+    println(io, "- Best selection score: $best_selection_score")
+    println(io, "- Baseline win rate: $baseline_win_rate")
+    println(io, "- Final loss: $final_loss")
+    if selection_current_best_rate !== nothing
+        println(io, "- Selection current best rate: $selection_current_best_rate")
     end
-    if haskey(metrics, "selection_promoted")
-        println(io, "- Selection promoted: $(metrics["selection_promoted"])")
+    if selection_promoted !== nothing
+        println(io, "- Selection promoted: $selection_promoted")
     end
     println(io)
     println(io, "## Source paths")
-    println(io, "- Runtime config snapshot: $(paths["runtime_config_snapshot"])")
-    println(io, "- Model config snapshot: $(paths["model_config_snapshot"])")
-    println(io, "- Training state: $(paths["training_state_path"])")
-    println(io, "- Last checkpoint: $(paths["last_checkpoint_path"])")
-    println(io, "- Best checkpoint: $(paths["best_checkpoint_path"])")
-    println(io, "- Final checkpoint: $(paths["final_checkpoint_path"])")
+    println(io, "- Runtime config snapshot: $runtime_config_snapshot")
+    println(io, "- Model config snapshot: $model_config_snapshot")
+    println(io, "- Training state: $training_state_path")
+    println(io, "- Last checkpoint: $last_checkpoint_path")
+    println(io, "- Best checkpoint: $best_checkpoint_path")
+    println(io, "- Final checkpoint: $final_checkpoint_path")
     println(io)
     println(io, "## Bundle contents")
     println(io, "- `$(RELEASE_SUMMARY_FILE)`")
@@ -384,9 +447,7 @@ function bundle_artifact_specs(summary::Dict{String, Any}, root_dir::AbstractStr
 end
 
 function bundle_manifest(summary::Dict{String, Any}, artifact_specs::Dict{String, String}, bundle_dir::AbstractString; bundle_kind::AbstractString, model_export_format::AbstractString)
-    run = summary["run"]
-    paths = summary["paths"]
-    metrics = summary["metrics"]
+    sections = release_summary_sections(summary)
 
     artifact_entries = expected_bundle_manifest_artifacts(artifact_specs)
     integrity_entries = Dict{String, Any}()
@@ -396,24 +457,25 @@ function bundle_manifest(summary::Dict{String, Any}, artifact_specs::Dict{String
 
     return Dict{String, Any}(
         "manifest_version" => 1,
+        "model_card_generator_version" => MODEL_CARD_GENERATOR_VERSION,
         "bundle_kind" => String(bundle_kind),
         "model_export_format" => String(model_export_format),
         "run" => Dict{String, Any}(
-            "commit_sha" => String(run["commit_sha"]),
-            "architecture" => String(run["architecture"]),
-            "release_id" => String(run["release_id"]),
-            "timestamp" => String(run["timestamp"]),
-            "checkpoint_dir" => String(run["checkpoint_dir"]),
+            "commit_sha" => String(sections.run["commit_sha"]),
+            "architecture" => String(sections.run["architecture"]),
+            "release_id" => String(sections.run["release_id"]),
+            "timestamp" => String(sections.run["timestamp"]),
+            "checkpoint_dir" => String(sections.run["checkpoint_dir"]),
         ),
         "source_paths" => Dict{String, Any}(
-            "runtime_config_snapshot" => String(paths["runtime_config_snapshot"]),
-            "model_config_snapshot" => String(paths["model_config_snapshot"]),
-            "training_state_path" => String(paths["training_state_path"]),
-            "last_checkpoint_path" => String(paths["last_checkpoint_path"]),
-            "best_checkpoint_path" => String(paths["best_checkpoint_path"]),
-            "final_checkpoint_path" => String(paths["final_checkpoint_path"]),
+            "runtime_config_snapshot" => String(sections.paths["runtime_config_snapshot"]),
+            "model_config_snapshot" => String(sections.paths["model_config_snapshot"]),
+            "training_state_path" => String(sections.paths["training_state_path"]),
+            "last_checkpoint_path" => String(sections.paths["last_checkpoint_path"]),
+            "best_checkpoint_path" => String(sections.paths["best_checkpoint_path"]),
+            "final_checkpoint_path" => String(sections.paths["final_checkpoint_path"]),
         ),
-        "metrics" => Dict{String, Any}(pairs(metrics)...),
+        "metrics" => Dict{String, Any}(pairs(sections.metrics)...),
         "artifacts" => artifact_entries,
         "integrity" => integrity_entries,
     )
@@ -446,6 +508,10 @@ function bundle_is_valid(bundle_dir::AbstractString, artifact_specs::Dict{String
     export_format_entry = get(manifest, "model_export_format", nothing)
     export_format_entry isa AbstractString || return false
     String(export_format_entry) == model_export_format || return false
+
+    generator_version_entry = get(manifest, "model_card_generator_version", nothing)
+    generator_version_entry isa Integer || return false
+    Int(generator_version_entry) == MODEL_CARD_GENERATOR_VERSION || return false
 
     artifacts = get(manifest, "artifacts", nothing)
     artifacts isa Dict{String, Any} || return false
@@ -568,13 +634,13 @@ function hf_upload_command(repo_id::AbstractString, local_path::AbstractString, 
     return `hf upload $repo_id $local_path $repo_path`
 end
 
-function publish_model_card_upload_target(bundle_dir::AbstractString)::Tuple{String, String}
-    return (joinpath(String(bundle_dir), MODEL_CARD_FILE), MODEL_CARD_FILE)
+function publish_model_card_upload_target(bundle_dir::AbstractString)
+    return (local_path=joinpath(String(bundle_dir), MODEL_CARD_FILE), repo_path=MODEL_CARD_FILE)
 end
 
 function publish_model_card_command(repo_id::AbstractString, bundle_dir::AbstractString)
-    local_path, repo_path = publish_model_card_upload_target(bundle_dir)
-    return hf_upload_command(repo_id, local_path, repo_path)
+    target = publish_model_card_upload_target(bundle_dir)
+    return hf_upload_command(repo_id, target.local_path, target.repo_path)
 end
 
 function publish_release_bundle(summary_path::AbstractString, repo_id::AbstractString; repo_path::Union{Nothing, AbstractString}=nothing, root_dir::AbstractString=DEFAULT_ROOT_DIR, upload_runner::Function=run)
