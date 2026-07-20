@@ -300,8 +300,8 @@ end
         close(log_b.in)
         output_b = read(log_b, String)
 
-        @test occursin("seed fija: $seed", output_a)
-        @test occursin("seed fija: $seed", output_b)
+        @test occursin("Initializing base model with fixed seed", output_a)
+        @test occursin("Initializing base model with fixed seed", output_b)
         @test train_module.Awale.predict(model_a, train_module.Awale.initial_state()) == train_module.Awale.predict(model_b, train_module.Awale.initial_state())
     end
 
@@ -621,8 +621,8 @@ end
                 read(path, String)
             end
 
-            @test occursin("Reanudando desde la iteración 24", first_output)
-            @test occursin("Contrato de reanudación: weights-only", first_output)
+            @test occursin("Checkpoint detected! Resuming from iteration", first_output)
+            @test occursin("Resume contract: weights-only", first_output)
             @test occursin("Best-selection target: 1 sims, 2 games, 1 openings, threshold", first_output)
             @test isfile(train_module.training_snapshot_path(25))
             @test !isfile(train_module.training_snapshot_path(26))
@@ -781,7 +781,8 @@ end
         end
         close(log.in)
         output = read(log, String)
-        @test occursin("Leyenda: P1 abajo, P2 arriba. La siembra es antihoraria.", output)
+        @test occursin("Legend: P1 at the bottom, P2 at the top.", output)
+        @test occursin("Sowing is counterclockwise.", output)
         @test occursin("[12: 4] [11: 4] [10: 4] [ 9: 4] [ 8: 4] [ 7: 4]", output)
         @test occursin("[ 1: 4] [ 2: 4] [ 3: 4] [ 4: 4] [ 5: 4] [ 6: 4]", output)
 
@@ -1000,7 +1001,7 @@ end
                 close(io)
                 read(path, String)
             end
-            @test occursin("No hay suficientes checkpoints compatibles para correr el arena.", output)
+            @test occursin("compatible checkpoints are available to run the arena", output)
         end
 
         mktempdir() do tmpdir

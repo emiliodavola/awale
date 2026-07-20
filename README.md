@@ -2,7 +2,7 @@
 
 ## Brief summary
 
-Research project for building an AlphaZero-like Awale system in Julia. The workflow is specification-first: formal contracts → tests → implementation. The canonical game rules live in `spec/01_game_rules/README.md` and `spec/03_environment_api/README.md`; `src/` contains the implementation. A Spanish snapshot of the original README is kept in `README_ES.md`.
+Research project for building an AlphaZero-like Awale system in Julia. The workflow is specification-first: formal contracts → tests → implementation. The canonical game rules live in `spec/01_game_rules/README.md` and `spec/03_environment_api/README.md`; `src/` contains the implementation. A complete Spanish mirror of this README is kept in `README_ES.md`.
 
 ## Current status
 
@@ -17,7 +17,7 @@ The model architecture lives in a local, unversioned `src/Awale/config.toml`; th
 ### Main scripts
 
 - `train.jl` — continue or run training and update checkpoints.
-- `publish_hf.jl` — assemble a release bundle and optionally upload it to Hugging Face.
+- `publish_hf.jl` — assemble a release bundle, generate an English Hugging Face model card, and optionally upload it to Hugging Face.
 - `checkpoint_arena.jl` — compare checkpoints against each other with `0`, `50`, and `200` simulations.
 - `play.jl` — run a single showcase game with board logs and CLI-configurable agents.
 - `scripts/benchmarks.jl` — microbenchmarks for hot paths (`encode_state`, `select_puct`, `backup`).
@@ -105,9 +105,12 @@ julia --project=. .\publish_hf.jl --publish --repo-id your-namespace/awale-resul
 
 The bundle is architecture-scoped under `checkpoints/<architecture>/release/<release_id>/`, and each run keeps its own `release_summary.toml` there so older runs stay discoverable. `publish_hf.jl` defaults to the newest run summary for that architecture.
 
+The staging flow also writes an English `README.md` model card at the bundle root from the release summary metadata, and the publish flow uploads that file to the Hugging Face repo root so it renders directly as the model card.
+
 It includes:
 
 - `model_final.bin`, `model_best.bin`, `model_last.bin`
+- `README.md` (English Hugging Face model card)
 - `training_state.toml`
 - copied runtime/model config snapshots
 - `release_summary.toml` and `manifest.toml`

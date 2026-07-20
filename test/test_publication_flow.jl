@@ -67,13 +67,21 @@ end
 
             @test bundle_dir == joinpath(root_dir, "checkpoints", "mlp", "release", "20260719_120000")
             @test isfile(joinpath(bundle_dir, "release_summary.toml"))
+            @test isfile(joinpath(bundle_dir, "README.md"))
             @test isfile(joinpath(bundle_dir, "artifacts", "model_final.bin"))
             @test isfile(joinpath(bundle_dir, "artifacts", "training_state.toml"))
+            model_card = read(joinpath(bundle_dir, "README.md"), String)
             @test manifest["run"]["release_id"] == "20260719_120000"
             @test manifest["artifacts"]["release_summary"] == "release_summary.toml"
             @test manifest["artifacts"]["model_final"] == "artifacts/model_final.bin"
             @test manifest["artifacts"]["training_state"] == "artifacts/training_state.toml"
+            @test manifest["artifacts"]["model_card"] == "README.md"
+            @test Awale.Publication.publish_model_card_upload_target(bundle_dir) == (joinpath(bundle_dir, "README.md"), "README.md")
             @test manifest["metrics"]["baseline_win_rate"] == 71.0
+            @test occursin("# Awale release 20260719_120000 model card", model_card)
+            @test occursin("Architecture: mlp", model_card)
+            @test occursin("Commit SHA: abc123", model_card)
+            @test occursin("Best selection score: 62.5", model_card)
             @test Awale.Publication.default_repo_path("mlp", "20260719_120000") == "releases/mlp/20260719_120000"
         end
     end

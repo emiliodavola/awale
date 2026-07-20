@@ -25,6 +25,7 @@ const RELEASE_SUBDIR = "release"
 const ARTIFACT_SUBDIR = "artifacts"
 const MANIFEST_FILE = "manifest.toml"
 const RELEASE_SUMMARY_FILE = "release_summary.toml"
+const MODEL_CARD_FILE = "README.md"
 const DEFAULT_ROOT_DIR = abspath(joinpath(@__DIR__, "..", ".."))
 
 function release_timestamp(now::DateTime=Dates.now())::String
@@ -74,6 +75,10 @@ end
 
 function release_bundle_summary_path(checkpoint_dir::AbstractString, release_id::AbstractString)::String
     return joinpath(String(checkpoint_dir), RELEASE_SUBDIR, String(release_id), RELEASE_SUMMARY_FILE)
+end
+
+function release_model_card_path(bundle_dir::AbstractString)::String
+    return joinpath(String(bundle_dir), MODEL_CARD_FILE)
 end
 
 function latest_release_summary_path(checkpoint_dir::AbstractString, architecture::AbstractString)::Union{String, Nothing}
@@ -181,6 +186,65 @@ function read_release_summary(path::AbstractString)::Dict{String, Any}
     return TOML.parsefile(path)
 end
 
+function release_model_card(summary::Dict{String, Any})::String
+    run = summary["run"]
+    paths = summary["paths"]
+    metrics = summary["metrics"]
+
+    io = IOBuffer()
+    println(io, "# Awale release $(run["release_id"]) model card")
+    println(io)
+    println(io, "This Hugging Face model card was generated from the release summary for a finished Awale training run.")
+    println(io)
+    println(io, "## Release metadata")
+    println(io, "- Architecture: $(run["architecture"])")
+    println(io, "- Release ID: $(run["release_id"])")
+    println(io, "- Commit SHA: $(run["commit_sha"])")
+    println(io, "- Timestamp: $(run["timestamp"])")
+    println(io, "- Checkpoint dir: $(run["checkpoint_dir"])")
+    println(io)
+    println(io, "## Metrics")
+    println(io, "- Last iteration: $(metrics["last_iter"])")
+    println(io, "- Best selection score: $(metrics["best_selection_score"])")
+    println(io, "- Baseline win rate: $(metrics["baseline_win_rate"])")
+    println(io, "- Final loss: $(metrics["final_loss"])")
+    if haskey(metrics, "selection_current_best_rate")
+        println(io, "- Selection current best rate: $(metrics["selection_current_best_rate"])")
+    end
+    if haskey(metrics, "selection_promoted")
+        println(io, "- Selection promoted: $(metrics["selection_promoted"])")
+    end
+    println(io)
+    println(io, "## Source paths")
+    println(io, "- Runtime config snapshot: $(paths["runtime_config_snapshot"])")
+    println(io, "- Model config snapshot: $(paths["model_config_snapshot"])")
+    println(io, "- Training state: $(paths["training_state_path"])")
+    println(io, "- Last checkpoint: $(paths["last_checkpoint_path"])")
+    println(io, "- Best checkpoint: $(paths["best_checkpoint_path"])")
+    println(io, "- Final checkpoint: $(paths["final_checkpoint_path"])")
+    println(io)
+    println(io, "## Bundle contents")
+    println(io, "- `$(RELEASE_SUMMARY_FILE)`")
+    println(io, "- `$(MANIFEST_FILE)`")
+    println(io, "- `$(MODEL_CARD_FILE)`")
+    println(io, "- `$(ARTIFACT_SUBDIR)/model_final.bin`")
+    println(io, "- `$(ARTIFACT_SUBDIR)/model_best.bin`")
+    println(io, "- `$(ARTIFACT_SUBDIR)/model_last.bin`")
+    println(io, "- `$(ARTIFACT_SUBDIR)/training_state.toml`")
+    println(io, "- `$(ARTIFACT_SUBDIR)/training_config.toml`")
+    println(io, "- `$(ARTIFACT_SUBDIR)/model_config.toml`")
+
+    return String(take!(io))
+end
+
+function write_release_model_card(bundle_dir::AbstractString, summary::Dict{String, Any})::String
+    path = release_model_card_path(bundle_dir)
+    atomic_write(path) do io
+        write(io, release_model_card(summary))
+    end
+    return path
+end
+
 function required_release_keys(summary::Dict{String, Any})
     haskey(summary, "run") || throw(ArgumentError("Release summary missing [run]"))
     haskey(summary, "paths") || throw(ArgumentError("Release summary missing [paths]"))
@@ -259,6 +323,7 @@ function bundle_manifest(summary::Dict{String, Any}, artifact_specs::Dict{String
         end
         artifact_entries[artifact_label] = bundle_relpath
     end
+    artifact_entries["model_card"] = MODEL_CARD_FILE
 
     return Dict{String, Any}(
         "manifest_version" => 1,
@@ -317,7 +382,11 @@ function stage_release_bundle(summary_path::AbstractString; root_dir::AbstractSt
     manifest_path = joinpath(bundle_dir, MANIFEST_FILE)
 
     if isfile(manifest_path)
-        return bundle_dir
+        existing_manifest = TOML.parsefile(manifest_path)
+        artifacts = get(existing_manifest, "artifacts", Dict{String, Any}())
+        if artifacts isa Dict{String, Any} && haskey(artifacts, "model_card") && isfile(release_model_card_path(bundle_dir))
+            return bundle_dir
+        end
     end
 
     mkpath(bundle_dir)
@@ -325,6 +394,8 @@ function stage_release_bundle(summary_path::AbstractString; root_dir::AbstractSt
     for (bundle_relpath, source_path) in planned.artifact_specs
         copy_artifact!(source_path, joinpath(bundle_dir, split(bundle_relpath, '/')...))
     end
+
+    write_release_model_card(bundle_dir, summary)
 
     atomic_write(manifest_path) do io
         TOML.print(io, bundle_manifest(summary, planned.artifact_specs))
@@ -341,6 +412,15 @@ function hf_upload_command(repo_id::AbstractString, local_path::AbstractString, 
     return `hf upload $repo_id $local_path $repo_path`
 end
 
+function publish_model_card_upload_target(bundle_dir::AbstractString)::Tuple{String, String}
+    return (joinpath(String(bundle_dir), MODEL_CARD_FILE), MODEL_CARD_FILE)
+end
+
+function publish_model_card_command(repo_id::AbstractString, bundle_dir::AbstractString)
+    local_path, repo_path = publish_model_card_upload_target(bundle_dir)
+    return hf_upload_command(repo_id, local_path, repo_path)
+end
+
 function publish_release_bundle(summary_path::AbstractString, repo_id::AbstractString; repo_path::Union{Nothing, AbstractString}=nothing, root_dir::AbstractString=DEFAULT_ROOT_DIR)
     summary = read_release_summary(summary_path)
     required_release_keys(summary)
@@ -348,6 +428,8 @@ function publish_release_bundle(summary_path::AbstractString, repo_id::AbstractS
     run_info = summary["run"]
     remote_path = repo_path === nothing ? default_repo_path(String(run_info["architecture"]), String(run_info["release_id"])) : String(repo_path)
     run(hf_upload_command(repo_id, bundle_dir, remote_path))
+    # Upload the rendered model card separately so it lands at the Hugging Face repo root.
+    run(publish_model_card_command(repo_id, bundle_dir))
     return bundle_dir
 end
 

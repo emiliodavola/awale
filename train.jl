@@ -178,7 +178,7 @@ end
 selection_rng(offset::Int) = Random.MersenneTwister(BEST_SELECTION_SEED + offset)
 
 function create_initial_model()
-    println("Inicializando modelo base con seed fija: $INITIAL_MODEL_SEED")
+    println("Initializing base model with fixed seed: $INITIAL_MODEL_SEED")
     Random.seed!(INITIAL_MODEL_SEED)
     return Awale.create_model(MODEL_CONFIG_PATH)
 end
@@ -280,7 +280,7 @@ function write_release_summary_file(
         selection_current_best_rate=selection_current_best_rate,
         selection_promoted=selection_promoted,
     )
-    println(" 📄 Release summary guardada en: $release_summary_file")
+    println(" 📄 Release summary saved to: $release_summary_file")
     return release_summary_file
 end
 
@@ -290,8 +290,8 @@ function snapshot_run_configs(log_dir::String, architecture::AbstractString, rel
     model_config_path = model_config_snapshot_path(log_dir, arch, release_id)
     model_config_source = abspath(ROOT_DIR, String(get(training_cfg, "model_config_path", joinpath("src", "Awale", "config.toml"))))
 
-    println("Registrando configuración para arquitectura $arch en: $runtime_config_path")
-    println("Registrando configuración de modelo para arquitectura $arch en: $model_config_path")
+    println("Writing runtime configuration for architecture $arch to: $runtime_config_path")
+    println("Writing model configuration for architecture $arch to: $model_config_path")
 
     runtime_data = read(joinpath(ROOT_DIR, "config.toml"), String)
     runtime_header = "# training_architecture = $arch\n# checkpoint_namespace = $(checkpoint_namespace_dir())\n"
@@ -324,11 +324,11 @@ function maybe_resume_from_legacy_checkpoint!(model_ref, start_iter_ref)
         namespaced_checkpoint = training_snapshot_path(last_iter)
         legacy_checkpoint = joinpath(CHECKPOINT_DIR, "model_iter_$last_iter.bin")
         checkpoint_file = isfile(namespaced_checkpoint) ? namespaced_checkpoint : legacy_checkpoint
-        println("¡Checkpoint legacy detectado! Reanudando desde la iteración $last_iter...")
-        println("Cargando modelo: $checkpoint_file")
+        println("Legacy checkpoint detected! Resuming from iteration $last_iter...")
+        println("Loading model: $checkpoint_file")
         model_ref[] = load_model(checkpoint_file)
     else
-        println("El entrenamiento legacy alcanzó la iteración máxima ($last_iter).")
+        println("Legacy training reached the maximum iteration ($last_iter).")
         start_iter_ref[] = NUM_ITERATIONS + 1
     end
 end
@@ -342,7 +342,7 @@ function should_save_snapshot(iter::Int, num_iterations::Int, checkpoint_every::
 end
 
 function main(args::Vector{String}=Base.ARGS)
-    println("--- Iniciando Entrenamiento y Evaluación de Awale ---")
+    println("--- Starting Awale Training and Evaluation ---")
 
     validate_training_config()
     validate_selection_config(BEST_PROMOTION_GAMES, BEST_OPENING_PLIES, BEST_OPENINGS_PER_PLY)
@@ -351,7 +351,7 @@ function main(args::Vector{String}=Base.ARGS)
     mkpath(checkpoint_root)
     mkpath(training_log_dir())
 
-    println("Arquitectura activa: $(architecture_slug(model_architecture_name()))")
+    println("Active architecture: $(architecture_slug(model_architecture_name()))")
     println("Checkpoint namespace: $checkpoint_root")
 
     release_id = release_id_slug()
@@ -360,7 +360,7 @@ function main(args::Vector{String}=Base.ARGS)
     release_summary_file = release_summary_path(CHECKPOINT_DIR, model_architecture_name(), release_id)
 
     rng = Random.MersenneTwister(BOOTSTRAP_RNG_SEED)
-println("Bootstrap RNG seed: $BOOTSTRAP_RNG_SEED | max_turns: $MAX_TURNS")
+    println("Bootstrap RNG seed: $BOOTSTRAP_RNG_SEED | max_turns: $MAX_TURNS")
 
     start_iter = Ref(1)
     best_selection_score = Ref(-1.0)
@@ -376,19 +376,19 @@ println("Bootstrap RNG seed: $BOOTSTRAP_RNG_SEED | max_turns: $MAX_TURNS")
     checkpoint_path = evaluation_checkpoint_existing_path()
 
     if "--reset" in args
-        println("⚠️ [RESTART] Modo reinicio activado. Ignorando checkpoints.")
+        println("⚠️ [RESTART] Reset mode enabled. Ignoring checkpoints.")
     elseif last_checkpoint_path !== nothing && training_state_path !== nothing
         last_iter, saved_best_selection_score, resume_contract = read_training_state(training_state_path)
         best_selection_score[] = saved_best_selection_score
 
         if last_iter < NUM_ITERATIONS
             start_iter[] = last_iter + 1
-            println("¡Checkpoint detectado! Reanudando desde la iteración $last_iter...")
-            println("Contrato de reanudación: $resume_contract (solo pesos; optimizer/replay/RNG no se persisten).")
-            println("Cargando modelo: $last_checkpoint_path")
+            println("Checkpoint detected! Resuming from iteration $last_iter...")
+            println("Resume contract: $resume_contract (weights only; optimizer/replay/RNG are not persisted).")
+            println("Loading model: $last_checkpoint_path")
             model[] = load_model(last_checkpoint_path)
         else
-            println("El entrenamiento alcanzó la iteración máxima ($last_iter).")
+            println("Training reached the maximum iteration ($last_iter).")
             if checkpoint_path !== nothing
                 model[] = load_model(checkpoint_path)
             else
@@ -398,7 +398,7 @@ println("Bootstrap RNG seed: $BOOTSTRAP_RNG_SEED | max_turns: $MAX_TURNS")
             last_completed_iter[] = last_iter
         end
     elseif checkpoint_path !== nothing
-        println("¡Modelo final detectado! El entrenamiento ya fue completado.")
+        println("Final model detected! Training has already completed.")
         model[] = load_model(checkpoint_path)
         last_completed_iter[] = NUM_ITERATIONS
         start_iter[] = NUM_ITERATIONS + 1
@@ -414,7 +414,7 @@ println("Bootstrap RNG seed: $BOOTSTRAP_RNG_SEED | max_turns: $MAX_TURNS")
 
     if start_iter[] <= NUM_ITERATIONS
         for iter in start_iter[]:NUM_ITERATIONS
-            println("\nIteración $iter / $NUM_ITERATIONS")
+            println("\nIteration $iter / $NUM_ITERATIONS")
 
             loss = run_training_iteration(
                 training_mcts,
@@ -431,8 +431,8 @@ println("Bootstrap RNG seed: $BOOTSTRAP_RNG_SEED | max_turns: $MAX_TURNS")
                 rng=rng,
                 max_turns=MAX_TURNS,
             )
-            println("  Loss promedio: $(round(loss, digits=4))")
-            println("  Replay buffer: $(length(replay_buffer)) muestras")
+            println("  Average loss: $(round(loss, digits=4))")
+            println("  Replay buffer: $(length(replay_buffer)) samples")
             last_loss[] = Float64(loss)
 
             agent_model = ModelAgent(evaluation_mcts, SIMS_PER_EVAL)
@@ -459,15 +459,15 @@ println("Bootstrap RNG seed: $BOOTSTRAP_RNG_SEED | max_turns: $MAX_TURNS")
             end
 
             if maybe_promote_best!(model[], best_selection_score, selection)
-                println("  ✅ Nuevo mejor modelo guardado en: $(training_best_checkpoint_path())")
+                println("  ✅ New best model saved to: $(training_best_checkpoint_path())")
             else
-                println("  ↳ Best no promovido: falló $(join(selection.gate_reasons, ", ")).")
+                println("  ↳ Best not promoted: failed $(join(selection.gate_reasons, ", ")).")
             end
 
             if should_save_snapshot(iter, NUM_ITERATIONS, CHECKPOINT_EVERY)
                 snapshot_path = training_snapshot_path(iter)
                 save_model(model[], snapshot_path)
-                println("  📦 Snapshot guardado en: $snapshot_path")
+                println("  📦 Snapshot saved to: $snapshot_path")
             end
 
             write_training_state(training_state_file_path(), iter, best_selection_score[])
@@ -475,11 +475,11 @@ println("Bootstrap RNG seed: $BOOTSTRAP_RNG_SEED | max_turns: $MAX_TURNS")
         end
 
         save_model(model[], evaluation_checkpoint_path())
-        println("\n--- Entrenamiento Finalizado ---")
-        println(" Modelo final guardado en: $(evaluation_checkpoint_path())")
+        println("\n--- Training Complete ---")
+        println(" Final model saved to: $(evaluation_checkpoint_path())")
 
     else
-        println("--- Entrenamiento ya completado. ---")
+        println("--- Training already completed. ---")
     end
 
     if start_iter[] > NUM_ITERATIONS && last_completed_iter[] == 0
