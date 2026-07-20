@@ -1,9 +1,10 @@
 module Publication
 
 using Dates
+using SHA
 using TOML
 
-using ..Model: atomic_write
+using ..Model: atomic_write, load_model, save_public_model
 using ..Utils: architecture_slug
 
 export release_id_slug,
@@ -17,15 +18,18 @@ export release_id_slug,
        write_release_summary,
        read_release_summary,
        stage_release_bundle,
+       stage_public_release_bundle,
        publish_release_bundle,
        default_repo_path,
-       resolve_repo_path
+       resolve_repo_path,
+       public_release_bundle_dir
 
 const RELEASE_SUBDIR = "release"
 const ARTIFACT_SUBDIR = "artifacts"
 const MANIFEST_FILE = "manifest.toml"
 const RELEASE_SUMMARY_FILE = "release_summary.toml"
 const MODEL_CARD_FILE = "README.md"
+const PUBLIC_MODEL_FILE_EXT = ".f32"
 const DEFAULT_ROOT_DIR = abspath(joinpath(@__DIR__, "..", ".."))
 
 function release_timestamp(now::DateTime=Dates.now())::String
@@ -79,6 +83,86 @@ end
 
 function release_model_card_path(bundle_dir::AbstractString)::String
     return joinpath(String(bundle_dir), MODEL_CARD_FILE)
+end
+
+function public_release_bundle_dir(checkpoint_dir::AbstractString, architecture::AbstractString, release_id::AbstractString)::String
+    return joinpath(release_bundle_dir(checkpoint_dir, architecture, release_id), "public")
+end
+
+function artifact_label(bundle_relpath::AbstractString)::String
+    artifact_file = basename(bundle_relpath)
+    artifact_file == RELEASE_SUMMARY_FILE && return "release_summary"
+    stem, _ = splitext(artifact_file)
+    stem == "training_state" && return "training_state"
+    stem == "training_config" && return "runtime_config_snapshot"
+    stem == "model_config" && return "model_config_snapshot"
+    return stem
+end
+
+function artifact_checksum(path::AbstractString)::Dict{String, Any}
+    isfile(path) || throw(ArgumentError("Missing release artifact: $path"))
+    return Dict{String, Any}(
+        "sha256" => bytes2hex(sha256(read(path))),
+        "bytes" => filesize(path),
+    )
+end
+
+function artifact_destination_name(artifact_file::AbstractString; public::Bool=false)::String
+    public || return artifact_file
+    artifact_file == "model_final.bin" && return "model_final$(PUBLIC_MODEL_FILE_EXT)"
+    artifact_file == "model_best.bin" && return "model_best$(PUBLIC_MODEL_FILE_EXT)"
+    artifact_file == "model_last.bin" && return "model_last$(PUBLIC_MODEL_FILE_EXT)"
+    return artifact_file
+end
+
+function bundle_artifact_path(bundle_dir::AbstractString, bundle_relpath::AbstractString)::String
+    return joinpath(String(bundle_dir), split(bundle_relpath, '/')...)
+end
+
+function bundle_file_relpath(bundle_dir::AbstractString, file_path::AbstractString)::String
+    return replace(relpath(String(file_path), String(bundle_dir)), '\\' => '/')
+end
+
+function bundle_file_paths(bundle_dir::AbstractString)::Set{String}
+    files = Set{String}()
+    isdir(bundle_dir) || return files
+
+    for (root, _, filenames) in walkdir(bundle_dir)
+        for filename in filenames
+            push!(files, bundle_file_relpath(bundle_dir, joinpath(root, filename)))
+        end
+    end
+
+    return files
+end
+
+function expected_bundle_file_paths(artifact_specs::Dict{String, String})::Set{String}
+    expected = Set{String}((MANIFEST_FILE, MODEL_CARD_FILE))
+    union!(expected, keys(artifact_specs))
+    return expected
+end
+
+function expected_bundle_manifest_artifacts(artifact_specs::Dict{String, String})::Dict{String, String}
+    artifact_entries = Dict{String, String}()
+    for bundle_relpath in keys(artifact_specs)
+        artifact_entries[artifact_label(bundle_relpath)] = bundle_relpath
+    end
+    artifact_entries["model_card"] = MODEL_CARD_FILE
+    return artifact_entries
+end
+
+function expected_bundle_integrity_paths(artifact_specs::Dict{String, String})::Set{String}
+    integrity_paths = Set{String}(keys(artifact_specs))
+    push!(integrity_paths, MODEL_CARD_FILE)
+    return integrity_paths
+end
+
+function dict_entries_match(actual::AbstractDict, expected::AbstractDict)::Bool
+    length(actual) == length(expected) || return false
+    for (key, value) in expected
+        get(actual, key, nothing) == value || return false
+    end
+    return true
 end
 
 function latest_release_summary_path(checkpoint_dir::AbstractString, architecture::AbstractString)::Union{String, Nothing}
@@ -186,7 +270,7 @@ function read_release_summary(path::AbstractString)::Dict{String, Any}
     return TOML.parsefile(path)
 end
 
-function release_model_card(summary::Dict{String, Any})::String
+function release_model_card(summary::Dict{String, Any}, artifact_specs::Dict{String, String}; bundle_kind::AbstractString, model_export_format::AbstractString)::String
     run = summary["run"]
     paths = summary["paths"]
     metrics = summary["metrics"]
@@ -202,6 +286,8 @@ function release_model_card(summary::Dict{String, Any})::String
     println(io, "- Commit SHA: $(run["commit_sha"])")
     println(io, "- Timestamp: $(run["timestamp"])")
     println(io, "- Checkpoint dir: $(run["checkpoint_dir"])")
+    println(io, "- Bundle kind: $(bundle_kind)")
+    println(io, "- Model export format: $(model_export_format)")
     println(io)
     println(io, "## Metrics")
     println(io, "- Last iteration: $(metrics["last_iter"])")
@@ -227,20 +313,17 @@ function release_model_card(summary::Dict{String, Any})::String
     println(io, "- `$(RELEASE_SUMMARY_FILE)`")
     println(io, "- `$(MANIFEST_FILE)`")
     println(io, "- `$(MODEL_CARD_FILE)`")
-    println(io, "- `$(ARTIFACT_SUBDIR)/model_final.bin`")
-    println(io, "- `$(ARTIFACT_SUBDIR)/model_best.bin`")
-    println(io, "- `$(ARTIFACT_SUBDIR)/model_last.bin`")
-    println(io, "- `$(ARTIFACT_SUBDIR)/training_state.toml`")
-    println(io, "- `$(ARTIFACT_SUBDIR)/training_config.toml`")
-    println(io, "- `$(ARTIFACT_SUBDIR)/model_config.toml`")
+    for bundle_relpath in sort!(collect(keys(artifact_specs)))
+        println(io, "- `$(bundle_relpath)`")
+    end
 
     return String(take!(io))
 end
 
-function write_release_model_card(bundle_dir::AbstractString, summary::Dict{String, Any})::String
+function write_release_model_card(bundle_dir::AbstractString, summary::Dict{String, Any}, artifact_specs::Dict{String, String}; bundle_kind::AbstractString, model_export_format::AbstractString)::String
     path = release_model_card_path(bundle_dir)
     atomic_write(path) do io
-        write(io, release_model_card(summary))
+        write(io, release_model_card(summary, artifact_specs; bundle_kind=bundle_kind, model_export_format=model_export_format))
     end
     return path
 end
@@ -269,7 +352,7 @@ function required_release_keys(summary::Dict{String, Any})
     return nothing
 end
 
-function bundle_artifact_specs(summary::Dict{String, Any}, root_dir::AbstractString, summary_path::AbstractString, checkpoint_dir::AbstractString)
+function bundle_artifact_specs(summary::Dict{String, Any}, root_dir::AbstractString, summary_path::AbstractString, checkpoint_dir::AbstractString; public::Bool=false)
     run = summary["run"]
     paths = summary["paths"]
     architecture = architecture_slug(String(run["architecture"]))
@@ -285,48 +368,36 @@ function bundle_artifact_specs(summary::Dict{String, Any}, root_dir::AbstractStr
         actual_path == expected_path || throw(ArgumentError("Release summary path does not match expected layout: $key"))
     end
 
+    model_final = artifact_destination_name("model_final.bin"; public=public)
+    model_best = artifact_destination_name("model_best.bin"; public=public)
+    model_last = artifact_destination_name("model_last.bin"; public=public)
+
     return Dict{String, String}(
         repo_relpath("release_summary.toml") => summary_source,
-        repo_relpath(ARTIFACT_SUBDIR, "model_final.bin") => expected_paths["final_checkpoint_path"],
-        repo_relpath(ARTIFACT_SUBDIR, "model_best.bin") => expected_paths["best_checkpoint_path"],
-        repo_relpath(ARTIFACT_SUBDIR, "model_last.bin") => expected_paths["last_checkpoint_path"],
+        repo_relpath(ARTIFACT_SUBDIR, model_final) => expected_paths["final_checkpoint_path"],
+        repo_relpath(ARTIFACT_SUBDIR, model_best) => expected_paths["best_checkpoint_path"],
+        repo_relpath(ARTIFACT_SUBDIR, model_last) => expected_paths["last_checkpoint_path"],
         repo_relpath(ARTIFACT_SUBDIR, "training_state.toml") => expected_paths["training_state_path"],
         repo_relpath(ARTIFACT_SUBDIR, "training_config.toml") => expected_paths["runtime_config_snapshot"],
         repo_relpath(ARTIFACT_SUBDIR, "model_config.toml") => expected_paths["model_config_snapshot"],
     )
 end
 
-function bundle_manifest(summary::Dict{String, Any}, artifact_specs::Dict{String, String})
+function bundle_manifest(summary::Dict{String, Any}, artifact_specs::Dict{String, String}, bundle_dir::AbstractString; bundle_kind::AbstractString, model_export_format::AbstractString)
     run = summary["run"]
     paths = summary["paths"]
     metrics = summary["metrics"]
 
-    artifact_entries = Dict{String, Any}()
-    for bundle_relpath in keys(artifact_specs)
-        artifact_file = basename(bundle_relpath)
-        artifact_label = if artifact_file == RELEASE_SUMMARY_FILE
-            "release_summary"
-        elseif artifact_file == "model_final.bin"
-            "model_final"
-        elseif artifact_file == "model_best.bin"
-            "model_best"
-        elseif artifact_file == "model_last.bin"
-            "model_last"
-        elseif artifact_file == "training_state.toml"
-            "training_state"
-        elseif artifact_file == "training_config.toml"
-            "runtime_config_snapshot"
-        elseif artifact_file == "model_config.toml"
-            "model_config_snapshot"
-        else
-            replace(artifact_file, "." => "_")
-        end
-        artifact_entries[artifact_label] = bundle_relpath
+    artifact_entries = expected_bundle_manifest_artifacts(artifact_specs)
+    integrity_entries = Dict{String, Any}()
+    for bundle_relpath in expected_bundle_integrity_paths(artifact_specs)
+        integrity_entries[bundle_relpath] = artifact_checksum(bundle_artifact_path(bundle_dir, bundle_relpath))
     end
-    artifact_entries["model_card"] = MODEL_CARD_FILE
 
     return Dict{String, Any}(
         "manifest_version" => 1,
+        "bundle_kind" => String(bundle_kind),
+        "model_export_format" => String(model_export_format),
         "run" => Dict{String, Any}(
             "commit_sha" => String(run["commit_sha"]),
             "architecture" => String(run["architecture"]),
@@ -344,6 +415,7 @@ function bundle_manifest(summary::Dict{String, Any}, artifact_specs::Dict{String
         ),
         "metrics" => Dict{String, Any}(pairs(metrics)...),
         "artifacts" => artifact_entries,
+        "integrity" => integrity_entries,
     )
 end
 
@@ -353,6 +425,70 @@ function copy_artifact!(source::AbstractString, destination::AbstractString)
     mkpath(dirname(destination))
     cp(source, destination; force=true)
     return destination
+end
+
+function stage_release_artifact!(source_path::AbstractString, destination_path::AbstractString; public::Bool=false)
+    public && endswith(destination_path, PUBLIC_MODEL_FILE_EXT) && return save_public_model(load_model(source_path), destination_path)
+    return copy_artifact!(source_path, destination_path)
+end
+
+function bundle_is_valid(bundle_dir::AbstractString, artifact_specs::Dict{String, String}; bundle_kind::AbstractString, model_export_format::AbstractString)::Bool
+    manifest_path = joinpath(String(bundle_dir), MANIFEST_FILE)
+    isfile(manifest_path) || return false
+    isfile(release_model_card_path(bundle_dir)) || return false
+    bundle_file_paths(bundle_dir) == expected_bundle_file_paths(artifact_specs) || return false
+
+    manifest = TOML.parsefile(manifest_path)
+    bundle_kind_entry = get(manifest, "bundle_kind", nothing)
+    bundle_kind_entry isa AbstractString || return false
+    String(bundle_kind_entry) == bundle_kind || return false
+
+    export_format_entry = get(manifest, "model_export_format", nothing)
+    export_format_entry isa AbstractString || return false
+    String(export_format_entry) == model_export_format || return false
+
+    artifacts = get(manifest, "artifacts", nothing)
+    artifacts isa Dict{String, Any} || return false
+
+    dict_entries_match(artifacts, expected_bundle_manifest_artifacts(artifact_specs)) || return false
+
+    integrity = get(manifest, "integrity", nothing)
+    integrity isa Dict{String, Any} || return false
+
+    expected_integrity_paths = expected_bundle_integrity_paths(artifact_specs)
+    length(integrity) == length(expected_integrity_paths) || return false
+
+    for bundle_relpath in expected_integrity_paths
+        entry = get(integrity, bundle_relpath, nothing)
+        entry isa Dict{String, Any} || return false
+        artifact_file = bundle_artifact_path(bundle_dir, bundle_relpath)
+        get(entry, "sha256", nothing) == bytes2hex(sha256(read(artifact_file))) || return false
+        get(entry, "bytes", nothing) == filesize(artifact_file) || return false
+    end
+
+    return true
+end
+
+function reset_bundle_dir!(bundle_dir::AbstractString)
+    ispath(bundle_dir) && rm(bundle_dir; force=true, recursive=true)
+    mkpath(bundle_dir)
+    return bundle_dir
+end
+
+function stage_bundle_artifacts(bundle_dir::AbstractString, artifact_specs::Dict{String, String}; public::Bool=false)
+    for (bundle_relpath, source_path) in artifact_specs
+        destination = bundle_artifact_path(bundle_dir, bundle_relpath)
+        stage_release_artifact!(source_path, destination; public=public)
+    end
+    return bundle_dir
+end
+
+function write_release_bundle(bundle_dir::AbstractString, summary::Dict{String, Any}, artifact_specs::Dict{String, String}; bundle_kind::AbstractString, model_export_format::AbstractString)
+    write_release_model_card(bundle_dir, summary, artifact_specs; bundle_kind=bundle_kind, model_export_format=model_export_format)
+    atomic_write(joinpath(bundle_dir, MANIFEST_FILE)) do io
+        TOML.print(io, bundle_manifest(summary, artifact_specs, bundle_dir; bundle_kind=bundle_kind, model_export_format=model_export_format))
+    end
+    return bundle_dir
 end
 
 function plan_release_bundle(summary_path::AbstractString; root_dir::AbstractString=DEFAULT_ROOT_DIR)
@@ -379,29 +515,49 @@ function stage_release_bundle(summary_path::AbstractString; root_dir::AbstractSt
     planned = plan_release_bundle(summary_path; root_dir=root_dir)
     bundle_dir = planned.bundle_dir
     summary = planned.summary
-    manifest_path = joinpath(bundle_dir, MANIFEST_FILE)
 
-    if isfile(manifest_path)
-        existing_manifest = TOML.parsefile(manifest_path)
-        artifacts = get(existing_manifest, "artifacts", Dict{String, Any}())
-        if artifacts isa Dict{String, Any} && haskey(artifacts, "model_card") && isfile(release_model_card_path(bundle_dir))
-            return bundle_dir
-        end
-    end
+    bundle_is_valid(bundle_dir, planned.artifact_specs; bundle_kind="local_trusted", model_export_format="serialization") && return bundle_dir
 
-    mkpath(bundle_dir)
+    reset_bundle_dir!(bundle_dir)
+    run = summary["run"]
+    paths = summary["paths"]
+    metrics = summary["metrics"]
+    write_release_summary(
+        joinpath(bundle_dir, RELEASE_SUMMARY_FILE);
+        commit_sha=String(run["commit_sha"]),
+        architecture=String(run["architecture"]),
+        release_id=String(run["release_id"]),
+        timestamp=String(run["timestamp"]),
+        checkpoint_dir=String(run["checkpoint_dir"]),
+        runtime_config_snapshot=String(paths["runtime_config_snapshot"]),
+        model_config_snapshot=String(paths["model_config_snapshot"]),
+        training_state_path=String(paths["training_state_path"]),
+        last_checkpoint_path=String(paths["last_checkpoint_path"]),
+        best_checkpoint_path=String(paths["best_checkpoint_path"]),
+        final_checkpoint_path=String(paths["final_checkpoint_path"]),
+        last_iter=Int(metrics["last_iter"]),
+        best_selection_score=metrics["best_selection_score"],
+        baseline_win_rate=metrics["baseline_win_rate"],
+        final_loss=metrics["final_loss"],
+        selection_current_best_rate=get(metrics, "selection_current_best_rate", nothing),
+        selection_promoted=get(metrics, "selection_promoted", nothing),
+    )
+    stage_bundle_artifacts(bundle_dir, planned.artifact_specs; public=false)
+    return write_release_bundle(bundle_dir, summary, planned.artifact_specs; bundle_kind="local_trusted", model_export_format="serialization")
+end
 
-    for (bundle_relpath, source_path) in planned.artifact_specs
-        copy_artifact!(source_path, joinpath(bundle_dir, split(bundle_relpath, '/')...))
-    end
+function stage_public_release_bundle(summary_path::AbstractString; root_dir::AbstractString=DEFAULT_ROOT_DIR)
+    planned = plan_release_bundle(summary_path; root_dir=root_dir)
+    run = planned.summary["run"]
+    checkpoint_dir = resolve_repo_path(root_dir, String(run["checkpoint_dir"]))
+    bundle_dir = public_release_bundle_dir(checkpoint_dir, String(run["architecture"]), String(run["release_id"]))
+    artifact_specs = bundle_artifact_specs(planned.summary, root_dir, summary_path, checkpoint_dir; public=true)
 
-    write_release_model_card(bundle_dir, summary)
+    bundle_is_valid(bundle_dir, artifact_specs; bundle_kind="public_safe", model_export_format="float32") && return bundle_dir
 
-    atomic_write(manifest_path) do io
-        TOML.print(io, bundle_manifest(summary, planned.artifact_specs))
-    end
-
-    return bundle_dir
+    reset_bundle_dir!(bundle_dir)
+    stage_bundle_artifacts(bundle_dir, artifact_specs; public=true)
+    return write_release_bundle(bundle_dir, planned.summary, artifact_specs; bundle_kind="public_safe", model_export_format="float32")
 end
 
 function default_repo_path(architecture::AbstractString, release_id::AbstractString)::String
@@ -421,15 +577,14 @@ function publish_model_card_command(repo_id::AbstractString, bundle_dir::Abstrac
     return hf_upload_command(repo_id, local_path, repo_path)
 end
 
-function publish_release_bundle(summary_path::AbstractString, repo_id::AbstractString; repo_path::Union{Nothing, AbstractString}=nothing, root_dir::AbstractString=DEFAULT_ROOT_DIR)
+function publish_release_bundle(summary_path::AbstractString, repo_id::AbstractString; repo_path::Union{Nothing, AbstractString}=nothing, root_dir::AbstractString=DEFAULT_ROOT_DIR, upload_runner::Function=run)
     summary = read_release_summary(summary_path)
     required_release_keys(summary)
-    bundle_dir = stage_release_bundle(summary_path; root_dir=root_dir)
+    bundle_dir = stage_public_release_bundle(summary_path; root_dir=root_dir)
     run_info = summary["run"]
     remote_path = repo_path === nothing ? default_repo_path(String(run_info["architecture"]), String(run_info["release_id"])) : String(repo_path)
-    run(hf_upload_command(repo_id, bundle_dir, remote_path))
-    # Upload the rendered model card separately so it lands at the Hugging Face repo root.
-    run(publish_model_card_command(repo_id, bundle_dir))
+    upload_runner(publish_model_card_command(repo_id, bundle_dir))
+    upload_runner(hf_upload_command(repo_id, bundle_dir, remote_path))
     return bundle_dir
 end
 
