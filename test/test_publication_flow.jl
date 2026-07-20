@@ -80,16 +80,29 @@ end
             @test manifest["artifacts"]["model_final"] == "artifacts/model_final.bin"
             @test manifest["artifacts"]["training_state"] == "artifacts/training_state.toml"
             @test manifest["artifacts"]["model_card"] == "README.md"
+            @test manifest["model_card_generator_version"] == Awale.Publication.MODEL_CARD_GENERATOR_VERSION
             @test haskey(manifest, "integrity")
             @test haskey(manifest["integrity"], "artifacts/model_final.bin")
-            @test Awale.Publication.publish_model_card_upload_target(bundle_dir) == (joinpath(bundle_dir, "README.md"), "README.md")
+            target = Awale.Publication.publish_model_card_upload_target(bundle_dir)
+            @test target.local_path == joinpath(bundle_dir, "README.md")
+            @test target.repo_path == "README.md"
             @test manifest["metrics"]["baseline_win_rate"] == 71.0
+            @test startswith(model_card, "---\n")
+            @test occursin("license: mit", model_card)
+            @test occursin("library_name: flux", model_card)
+            @test occursin("  - julia", model_card)
+            @test occursin("  - awale", model_card)
+            @test occursin("model-index:", model_card)
+            @test occursin("Awale self-play evaluation", model_card)
+            @test occursin("Awale release summary", model_card)
+            @test occursin("This model card documents an Awale policy/value network implemented in Julia with Flux.jl.", model_card)
             @test occursin("# Awale release 20260719_120000 model card", model_card)
             @test occursin("Architecture: mlp", model_card)
             @test occursin("Bundle kind: local_trusted", model_card)
             @test occursin("Model export format: serialization", model_card)
             @test occursin("Commit SHA: abc123", model_card)
             @test occursin("Best selection score: 62.5", model_card)
+            @test !occursin("Transformers", model_card)
             @test Awale.Publication.default_repo_path("mlp", "20260719_120000") == "releases/mlp/20260719_120000"
         end
     end
@@ -103,6 +116,42 @@ end
             restaged = Awale.Publication.stage_release_bundle(summary_path; root_dir=root_dir)
             @test restaged == bundle_dir
             @test isfile(joinpath(bundle_dir, "artifacts", "model_final.bin"))
+        end
+    end
+
+    @testset "staged bundles are rebuilt when the model-card generator version changes" begin
+        mktempdir() do root_dir
+            summary_path = seed_release_inputs(root_dir)
+            planned = Awale.Publication.plan_release_bundle(summary_path; root_dir=root_dir)
+            bundle_dir = Awale.Publication.stage_release_bundle(summary_path; root_dir=root_dir)
+            manifest_path = joinpath(bundle_dir, "manifest.toml")
+            manifest = TOML.parsefile(manifest_path)
+            manifest["model_card_generator_version"] = Awale.Publication.MODEL_CARD_GENERATOR_VERSION + 1
+            open(manifest_path, "w") do io
+                TOML.print(io, manifest)
+            end
+
+            @test !Awale.Publication.bundle_is_valid(bundle_dir, planned.artifact_specs; bundle_kind="local_trusted", model_export_format="serialization")
+            restaged = Awale.Publication.stage_release_bundle(summary_path; root_dir=root_dir)
+            @test restaged == bundle_dir
+            @test TOML.parsefile(manifest_path)["model_card_generator_version"] == Awale.Publication.MODEL_CARD_GENERATOR_VERSION
+        end
+    end
+
+    @testset "staged bundles are rebuilt when the model card changes" begin
+        mktempdir() do root_dir
+            summary_path = seed_release_inputs(root_dir)
+            planned = Awale.Publication.plan_release_bundle(summary_path; root_dir=root_dir)
+            bundle_dir = Awale.Publication.stage_release_bundle(summary_path; root_dir=root_dir)
+            readme_path = joinpath(bundle_dir, "README.md")
+            original_readme = read(readme_path, String)
+
+            write(readme_path, "stale model card\n")
+
+            @test !Awale.Publication.bundle_is_valid(bundle_dir, planned.artifact_specs; bundle_kind="local_trusted", model_export_format="serialization")
+            restaged = Awale.Publication.stage_release_bundle(summary_path; root_dir=root_dir)
+            @test restaged == bundle_dir
+            @test read(readme_path, String) == original_readme
         end
     end
 
