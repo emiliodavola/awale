@@ -5,7 +5,7 @@ using Flux
 using Serialization
 using ..State: GameState, canonicalize, encode_state
 
-export create_model, predict, predict_batch, predict_inference, predict_batch_inference, predict_raw, encode_state, save_model, load_model
+export create_model, predict, predict_batch, predict_inference, predict_batch_inference, predict_raw, encode_state, save_model, load_model, save_public_model, load_public_model
 
 mutable struct AwaleModel
     shared::Chain
@@ -296,6 +296,11 @@ function atomic_write(write_fn::Function, path::AbstractString)
     return path
 end
 
+function public_model_weights(model::AwaleModel)::Vector{Float32}
+    weights, _ = Flux.destructure(model)
+    return Float32.(weights)
+end
+
 """
     save_model(model, path)
 
@@ -309,6 +314,47 @@ function save_model(model::AwaleModel, path::AbstractString)
         Serialization.serialize(io, model)
     end
     return path
+end
+
+"""
+    save_public_model(model, path)
+
+Persist a release-safe checkpoint payload containing only raw `Float32` weights.
+
+This is a public-export format for Hugging Face releases: it is data-only, not a Julia
+serialized object, and must be reconstructed with `load_public_model`.
+"""
+function save_public_model(model::AwaleModel, path::AbstractString)
+    weights = public_model_weights(model)
+    atomic_write(path) do io
+        write(io, weights)
+    end
+    return path
+end
+
+function public_model_config_path(path::AbstractString)::String
+    return joinpath(dirname(String(path)), "model_config.toml")
+end
+
+"""
+    load_public_model(path[, config_path])
+
+Load a public release checkpoint saved by `save_public_model`.
+
+By default, the model structure is recreated from a sibling `model_config.toml`
+next to the public checkpoint. An explicit `config_path` still overrides that
+inferred location.
+"""
+function load_public_model(path::AbstractString, config_path::AbstractString=public_model_config_path(path))::AwaleModel
+    filesize(path) % sizeof(Float32) == 0 || throw(ArgumentError("Invalid public model payload size: $path"))
+    weights = Vector{Float32}(undef, filesize(path) ÷ sizeof(Float32))
+    open(path, "r") do io
+        read!(io, weights)
+    end
+
+    prototype = create_model(String(config_path))
+    _, reconstruct = Flux.destructure(prototype)
+    return reconstruct(weights)
 end
 
 """

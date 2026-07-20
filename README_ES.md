@@ -86,7 +86,7 @@ julia --project=. .\train.jl
 
 El entrenamiento usa tu `config.toml` local, guarda `model_last.bin`, `model_best.bin`, `model_final.bin` y snapshots `model_iter_N.bin` bajo `checkpoints/<architecture>/` solo en hitos automáticos: iteración 1, potencias de 2 y múltiplos de `checkpoint_every`. El log de entrenamiento también se guarda bajo `checkpoints/<architecture>/log/` e incluye la arquitectura activa en el nombre y en el contenido copiado.
 
-Los checkpoints `.bin` se tratan como artefactos locales de confianza: el flujo actual usa `Serialization` para checkpoints generados por el propio repo, no como un formato para cargar archivos arbitrarios de terceros.
+Los checkpoints `.bin` se tratan como artefactos locales de confianza: el flujo actual usa `Serialization` para checkpoints generados por el propio repo, no como un formato para cargar archivos arbitrarios de terceros. Las publicaciones públicas en Hugging Face usan exportaciones seguras en `Float32` en lugar de checkpoints crudos serializados por Julia.
 
 ### 4. Publicar una corrida terminada en Hugging Face
 
@@ -107,11 +107,11 @@ julia --project=. .\publish_hf.jl --publish --repo-id your-namespace/awale-resul
 
 El bundle queda acotado por arquitectura bajo `checkpoints/<architecture>/release/<release_id>/`, y cada corrida conserva su propio `release_summary.toml` ahí para que las corridas viejas sigan siendo descubribles. `publish_hf.jl` toma por defecto el resumen más nuevo de esa arquitectura.
 
-El flujo de staging también escribe un `README.md` en inglés en la raíz del bundle a partir de los metadatos de `release_summary.toml`, y el flujo de publicación sube ese archivo a la raíz del repositorio de Hugging Face para que se renderice directamente como tarjeta de modelo.
+El flujo de staging también escribe un `README.md` en inglés en la raíz del bundle a partir de los metadatos de `release_summary.toml`, y el flujo de publicación sube ese archivo a la raíz del repositorio de Hugging Face para que se renderice directamente como tarjeta de modelo. La publicación pública contiene exportaciones seguras en `Float32`, no los checkpoints `.bin` crudos.
 
 Incluye:
 
-- `model_final.bin`, `model_best.bin`, `model_last.bin`
+- `model_final.f32`, `model_best.f32`, `model_last.f32`
 - `README.md` (tarjeta de modelo de Hugging Face en inglés)
 - `training_state.toml`
 - snapshots copiados de runtime/model config
