@@ -250,7 +250,7 @@ function main(; post_freeze_callback=nothing)
     alias_matchups = operational_alias_matchups(detected_labels, numeric_labels)
 
     if isempty(matchups) && isempty(anchor_matchups) && isempty(alias_matchups)
-        println("No hay suficientes checkpoints compatibles para correr el arena.")
+        println("Not enough compatible checkpoints are available to run the arena.")
         return
     end
 
@@ -267,8 +267,8 @@ function main(; post_freeze_callback=nothing)
         model_cache=model_cache,
     ))
     openings = generate_opening_suite(plies=DEFAULT_OPENING_PLIES, openings_per_ply=OPENINGS_PER_PLY, seed=OPENING_SEED)
-    println("Checkpoints detectados: $(join(checkpoint_label.(detected_labels), ", "))")
-    println("Opening suite: $(length(openings)) posiciones reproducibles (plies=$(DEFAULT_OPENING_PLIES), openings_per_ply=$(OPENINGS_PER_PLY))")
+    println("Detected checkpoints: $(join(checkpoint_label.(detected_labels), ", "))")
+    println("Opening suite: $(length(openings)) reproducible positions (plies=$(DEFAULT_OPENING_PLIES), openings_per_ply=$(OPENINGS_PER_PLY))")
     println("Frozen labels for this run: $(join(sort!(string.(keys(model_cache))), ", "))")
     println("Planned labels for this run: $(join(sort!(string.(planned_labels)), ", "))")
 

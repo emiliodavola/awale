@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: "If you use Awale in academic work, please cite it using the metadata below."
+
+type: software
+title: "Awale"
+version: "0.1.1"
+date-released: "2026-07-20"
+
+authors:
+  - family-names: "Correa Dávola"
+    given-names: "Emilio"
+
+repository-code: "https://github.com/emiliodavola/awale"
+url: "https://github.com/emiliodavola/awale"
+
+license: MIT
+
+keywords:
+  - Julia
+  - Awale
+  - AlphaZero
+  - reinforcement learning
+
+abstract: >
+  Awale is a Julia research project for building an
+  AlphaZero-like Awale system.

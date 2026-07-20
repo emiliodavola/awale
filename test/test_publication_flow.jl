@@ -17,14 +17,16 @@ function seed_release_inputs(root_dir::AbstractString; checkpoint_root_relpath::
         "training_state.toml" => joinpath(arch_dir, "training_state.toml"),
     )
 
+    model = Awale.create_model()
     for (label, path) in artifact_paths
-        write(path, "artifact:$label")
+        endswith(label, ".bin") && Awale.Model.save_model(model, path)
     end
+    write(artifact_paths["training_state.toml"], "resume_contract = \"weights-only\"\nlast_iter = 300\n")
 
     runtime_snapshot = joinpath(log_dir, "training_config_mlp_$(release_id).toml")
     model_snapshot = joinpath(log_dir, "model_config_mlp_$(release_id).toml")
     write(runtime_snapshot, "training = true\n")
-    write(model_snapshot, "model = true\n")
+    write(model_snapshot, read(joinpath(@__DIR__, "..", "src", "Awale", "config.toml"), String))
 
     summary_path = Awale.Publication.release_summary_path(checkpoint_dir, "mlp", release_id)
     Awale.Publication.write_release_summary(
@@ -66,15 +68,109 @@ end
             manifest = TOML.parsefile(manifest_path)
 
             @test bundle_dir == joinpath(root_dir, "checkpoints", "mlp", "release", "20260719_120000")
+            @test manifest["bundle_kind"] == "local_trusted"
+            @test manifest["model_export_format"] == "serialization"
             @test isfile(joinpath(bundle_dir, "release_summary.toml"))
+            @test isfile(joinpath(bundle_dir, "README.md"))
             @test isfile(joinpath(bundle_dir, "artifacts", "model_final.bin"))
             @test isfile(joinpath(bundle_dir, "artifacts", "training_state.toml"))
+            model_card = read(joinpath(bundle_dir, "README.md"), String)
             @test manifest["run"]["release_id"] == "20260719_120000"
             @test manifest["artifacts"]["release_summary"] == "release_summary.toml"
             @test manifest["artifacts"]["model_final"] == "artifacts/model_final.bin"
             @test manifest["artifacts"]["training_state"] == "artifacts/training_state.toml"
+            @test manifest["artifacts"]["model_card"] == "README.md"
+            @test haskey(manifest, "integrity")
+            @test haskey(manifest["integrity"], "artifacts/model_final.bin")
+            @test Awale.Publication.publish_model_card_upload_target(bundle_dir) == (joinpath(bundle_dir, "README.md"), "README.md")
             @test manifest["metrics"]["baseline_win_rate"] == 71.0
+            @test occursin("# Awale release 20260719_120000 model card", model_card)
+            @test occursin("Architecture: mlp", model_card)
+            @test occursin("Bundle kind: local_trusted", model_card)
+            @test occursin("Model export format: serialization", model_card)
+            @test occursin("Commit SHA: abc123", model_card)
+            @test occursin("Best selection score: 62.5", model_card)
             @test Awale.Publication.default_repo_path("mlp", "20260719_120000") == "releases/mlp/20260719_120000"
+        end
+    end
+
+    @testset "staged bundles are rebuilt when expected artifacts disappear" begin
+        mktempdir() do root_dir
+            summary_path = seed_release_inputs(root_dir)
+            bundle_dir = Awale.Publication.stage_release_bundle(summary_path; root_dir=root_dir)
+            rm(joinpath(bundle_dir, "artifacts", "model_final.bin"))
+
+            restaged = Awale.Publication.stage_release_bundle(summary_path; root_dir=root_dir)
+            @test restaged == bundle_dir
+            @test isfile(joinpath(bundle_dir, "artifacts", "model_final.bin"))
+        end
+    end
+
+    @testset "local trusted bundles restage cleanly when a stray file appears" begin
+        mktempdir() do root_dir
+            summary_path = seed_release_inputs(root_dir)
+            bundle_dir = Awale.Publication.stage_release_bundle(summary_path; root_dir=root_dir)
+            stray_path = joinpath(bundle_dir, "artifacts", "stray.txt")
+            write(stray_path, "leftover")
+
+            restaged = Awale.Publication.stage_release_bundle(summary_path; root_dir=root_dir)
+            @test restaged == bundle_dir
+            @test !isfile(stray_path)
+            @test isfile(joinpath(bundle_dir, "artifacts", "model_final.bin"))
+            @test isfile(joinpath(bundle_dir, "manifest.toml"))
+        end
+    end
+
+    @testset "public release bundle exports safe float payloads" begin
+        mktempdir() do root_dir
+            summary_path = seed_release_inputs(root_dir)
+            public_bundle_dir = Awale.Publication.stage_public_release_bundle(summary_path; root_dir=root_dir)
+            manifest = TOML.parsefile(joinpath(public_bundle_dir, "manifest.toml"))
+
+            @test public_bundle_dir == joinpath(root_dir, "checkpoints", "mlp", "release", "20260719_120000", "public")
+            @test manifest["bundle_kind"] == "public_safe"
+            @test manifest["model_export_format"] == "float32"
+            @test isfile(joinpath(public_bundle_dir, "README.md"))
+            @test isfile(joinpath(public_bundle_dir, "artifacts", "model_final.f32"))
+            @test !isfile(joinpath(public_bundle_dir, "artifacts", "model_final.bin"))
+            @test manifest["artifacts"]["model_final"] == "artifacts/model_final.f32"
+            @test manifest["artifacts"]["model_card"] == "README.md"
+            @test all(!endswith(String(path), ".bin") for path in values(manifest["artifacts"]))
+
+            local_model = Awale.Model.load_model(joinpath(root_dir, "checkpoints", "mlp", "model_final.bin"))
+            public_model = Awale.Model.load_public_model(joinpath(public_bundle_dir, "artifacts", "model_final.f32"))
+            @test Awale.predict(public_model, Awale.initial_state()) == Awale.predict(local_model, Awale.initial_state())
+            @test occursin("Bundle kind: public_safe", read(joinpath(public_bundle_dir, "README.md"), String))
+            @test occursin("Model export format: float32", read(joinpath(public_bundle_dir, "README.md"), String))
+        end
+    end
+
+    @testset "public bundles restage cleanly when a stray file appears" begin
+        mktempdir() do root_dir
+            summary_path = seed_release_inputs(root_dir)
+            public_bundle_dir = Awale.Publication.stage_public_release_bundle(summary_path; root_dir=root_dir)
+            stray_path = joinpath(public_bundle_dir, "artifacts", "stray.txt")
+            write(stray_path, "leftover")
+
+            restaged = Awale.Publication.stage_public_release_bundle(summary_path; root_dir=root_dir)
+            @test restaged == public_bundle_dir
+            @test !isfile(stray_path)
+            @test isfile(joinpath(public_bundle_dir, "artifacts", "model_final.f32"))
+            @test isfile(joinpath(public_bundle_dir, "manifest.toml"))
+        end
+    end
+
+    @testset "publish flow uploads the model card before the bundle" begin
+        mktempdir() do root_dir
+            summary_path = seed_release_inputs(root_dir)
+            commands = Cmd[]
+            upload_runner(cmd) = (push!(commands, cmd); nothing)
+
+            bundle_dir = Awale.Publication.publish_release_bundle(summary_path, "user/repo"; root_dir=root_dir, upload_runner=upload_runner)
+            expected_model_card = Awale.Publication.publish_model_card_command("user/repo", bundle_dir)
+            expected_bundle = Awale.Publication.hf_upload_command("user/repo", bundle_dir, Awale.Publication.default_repo_path("mlp", "20260719_120000"))
+
+            @test commands == [expected_model_card, expected_bundle]
         end
     end
 
