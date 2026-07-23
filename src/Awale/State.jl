@@ -29,6 +29,11 @@ struct GameConfig
     forced_feeding::Symbol
 end
 
+"""
+    GameConfig(; starvation=:allow_capture, grand_slam=:allow, repetition=:draw_on_repeat, forced_feeding=:require_feed) -> GameConfig
+
+Keyword-argument convenience constructor for `GameConfig` with default rule variants.
+"""
 GameConfig(; starvation::Symbol=:allow_capture, grand_slam::Symbol=:allow, repetition::Symbol=:draw_on_repeat,
 forced_feeding::Symbol=:require_feed) =
     GameConfig(starvation, grand_slam, repetition, forced_feeding)
@@ -71,6 +76,12 @@ function initial_state(config::GameConfig=GameConfig())::GameState
     return GameState(board, to_move, captured, h, config, history)
 end
 
+"""
+    rotate_board(b::SVector{12,UInt8}, k::Int) -> SVector{12,UInt8}
+
+Rotate the board by `k` positions forward (circular shift).
+Used by `canonicalize` to align player 1's side to pits 1-6.
+"""
 rotate_board(b::SVector{12,UInt8}, k::Int) = SVector{12,UInt8}(ntuple(i -> b[mod1(i + k, 12)], 12))
 
 """
