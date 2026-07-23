@@ -1,3 +1,9 @@
+"""
+    Model
+
+Neural network model definition, inference, checkpoint persistence, and
+public model export for Hugging Face releases.
+"""
 module Model
 
 using TOML
@@ -7,6 +13,12 @@ using ..State: GameState, canonicalize, encode_state
 
 export create_model, predict, predict_batch, predict_inference, predict_batch_inference, predict_raw, encode_state, save_model, load_model, save_public_model, load_public_model
 
+"""
+    AwaleModel
+
+Dual-head neural network with shared trunk, policy head (logits), and value head (scalar).
+Uses `Flux.@layer` for automatic parameter tracking.
+"""
 mutable struct AwaleModel
     shared::Chain
     policy::Chain
@@ -16,6 +28,11 @@ end
 # Use @layer for Flux >= 0.15 to avoid deprecation warnings and ensure parameter tracking
 Flux.@layer AwaleModel
 
+"""
+    ReshapeLayer
+
+Flux-compatible layer that reshapes input to a fixed target shape.
+"""
 struct ReshapeLayer
     shape::Vector{Int}
 end
@@ -43,6 +60,11 @@ end
 
 (layer::GlobalAveragePoolLayer)(x) = global_average_pool(x)
 
+"""
+    model_architecture(model_cfg) -> String
+
+Extract the architecture name from a parsed TOML model configuration.
+"""
 function model_architecture(model_cfg)::String
     architecture = get(model_cfg, "architecture", "mlp")
     return lowercase(String(architecture))
@@ -154,6 +176,12 @@ function dropout_layer(spec::AbstractDict)
     return Dropout(Float64(rate))
 end
 
+"""
+    build_layer(spec, act_map)
+
+Build a single Flux layer from a TOML specification dictionary.
+Supports: Dense, Conv, Reshape, Flatten, MaxPool, MeanPool, GlobalAveragePool, BatchNorm, Dropout.
+"""
 function build_layer(spec::AbstractDict, act_map)
     haskey(spec, "type") || throw(ArgumentError("Layer specification is missing the 'type' field."))
     layer_type = normalize_type_name(spec["type"])
@@ -187,6 +215,12 @@ function build_layer_stack(layer_specs, act_map, stack_name::AbstractString)
     return Chain([build_layer(layer, act_map) for layer in layer_specs]...)
 end
 
+"""
+    build_model(model_cfg) -> AwaleModel
+
+Construct an `AwaleModel` from a parsed TOML configuration section.
+Expects `shared`, `policy`, and `value` layer stacks.
+"""
 function build_model(model_cfg)
     haskey(model_cfg, "layers") || throw(ArgumentError("Model configuration is missing the 'layers' section."))
     layers = model_cfg["layers"]
@@ -213,6 +247,12 @@ function select_model_config(model_cfg, architecture::String)
     return model_cfg
 end
 
+"""
+    create_model(config_path::String=...) -> AwaleModel
+
+Load model configuration from TOML and build the neural network.
+Reads architecture selection and variant config from the file.
+"""
 function create_model(config_path::String=joinpath(@__DIR__, "config.toml"))
     config = TOML.parsefile(config_path)
     model_cfg = config["model"]
@@ -221,6 +261,12 @@ function create_model(config_path::String=joinpath(@__DIR__, "config.toml"))
     return build_model(selected_cfg)
 end
 
+"""
+    predict_raw(model::AwaleModel, X::AbstractMatrix{Float32}) -> (logits, value)
+
+Run forward pass through shared trunk, policy head, and value head.
+Returns policy logits and a scalar value estimate.
+"""
 function predict_raw(model::AwaleModel, X::AbstractMatrix{Float32})
     shared_out = model.shared(X)
     logits = model.policy(shared_out)
@@ -237,6 +283,11 @@ function with_inference_mode(f::Function, model::AwaleModel)
     end
 end
 
+"""
+    predict_inference(model::AwaleModel, s::GameState) -> (logits, value)
+
+Run inference on a single state, switching the model to test mode temporarily.
+"""
 function predict_inference(model::AwaleModel, s::GameState)
     s_can = canonicalize(s)
     x = reshape(vec(encode_state(s_can)), :, 1)
@@ -246,11 +297,21 @@ function predict_inference(model::AwaleModel, s::GameState)
     end, model)
 end
 
+"""
+    predict_batch_inference(model::AwaleModel, states::Vector{GameState}) -> (logits, values)
+
+Run batched inference with test mode, returning raw logits and values.
+"""
 function predict_batch_inference(model::AwaleModel, states::Vector{GameState})
     X = hcat([vec(encode_state(canonicalize(s))) for s in states]...)
     return with_inference_mode(() -> predict_raw(model, X), model)
 end
 
+"""
+    predict(model::AwaleModel, s::GameState) -> (logits, value)
+
+Forward pass on a single state in train mode. Prefer `predict_inference` for inference.
+"""
 function predict(model::AwaleModel, s::GameState)
     s_can = canonicalize(s)
     x = reshape(vec(encode_state(s_can)), :, 1)
@@ -258,6 +319,11 @@ function predict(model::AwaleModel, s::GameState)
     return vec(logits), value[1]
 end
 
+"""
+    predict_batch(model::AwaleModel, states::Vector{GameState}) -> (logits, values)
+
+Batched forward pass in train mode.
+"""
 function predict_batch(model::AwaleModel, states::Vector{GameState})
     X = hcat([vec(encode_state(canonicalize(s))) for s in states]...)
     return predict_raw(model, X)

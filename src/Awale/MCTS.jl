@@ -1,3 +1,9 @@
+"""
+    MCTS
+
+AlphaZero-style Monte Carlo Tree Search with PUCT selection,
+Dirichlet root noise, and transposition-aware backup.
+"""
 module MCTS
 
 using ..State: GameState, canonicalize, serialize_state
@@ -9,6 +15,18 @@ using Flux: softmax
 
 export MCTSSearch, search, search_with_stats
 
+"""
+    MCTSNode
+
+Single node in the MCTS tree.
+
+# Fields
+- state::GameState — the game position at this node
+- prior::Float32 — prior probability from the policy network
+- visits::Ref{Int64} — visit count (mutable via Ref for tree traversal)
+- value_sum::Ref{Float32} — accumulated value (mutable via Ref)
+- children::Dict{Int, MCTSNode} — child nodes keyed by action
+"""
 struct MCTSNode
     state::GameState
     prior::Float32
@@ -21,12 +39,27 @@ function MCTSNode(s::GameState, prior::Float32=1.0f0)
     return MCTSNode(s, prior, Ref(0), Ref(0.0f0), Dict())
 end
 
+"""
+    MCTSSearch
+
+Search configuration holding the neural model and PUCT constant.
+
+# Fields
+- model — the neural network for policy/value predictions
+- c_puct::Float32 — exploration constant in PUCT formula
+- transposition_table::Dict — cache of (q_value, visits) by transposition key
+"""
 struct MCTSSearch
     model
     c_puct::Float32
     transposition_table::Dict{UInt64, Tuple{Float32, Int64}}
 end
 
+"""
+    transposition_key(state::GameState) -> UInt64
+
+Compute a hash key that includes past history, enabling transposition-aware search.
+"""
 function transposition_key(state::GameState)::UInt64
     bytes = serialize_state(state)
     for past_hash in sort!(collect(state.history_hashes))
@@ -37,11 +70,21 @@ function transposition_key(state::GameState)::UInt64
     return fnv1a64(bytes)
 end
 
+"""
+    search(mcts::MCTSSearch, root_state, num_sims, rng; add_root_noise) -> Int
+
+Run MCTS and return the best action. Convenience wrapper around `search_with_stats`.
+"""
 function search(mcts::MCTSSearch, root_state::GameState, num_sims::Int, rng=Random.default_rng(); add_root_noise::Bool=false)
     action, _ = search_with_stats(mcts, root_state, num_sims, rng; add_root_noise=add_root_noise)
     return action
 end
 
+"""
+    legal_action_priors(logits, actions) -> Vector{Float32}
+
+Mask policy logits to legal actions and softmax-normalize them into priors.
+"""
 function legal_action_priors(logits::AbstractVector{<:Real}, actions::Vector{Int})
     mask = fill(-Inf32, length(logits))
     for action in actions
@@ -59,6 +102,12 @@ function legal_action_priors(logits::AbstractVector{<:Real}, actions::Vector{Int
     return priors ./ total
 end
 
+"""
+    search_with_stats(mcts, root_state, num_sims, rng; add_root_noise) -> (best_action, policy)
+
+Run MCTS for `num_sims` iterations, returning the best action and visit-count policy.
+When `add_root_noise` is true, Dirichlet noise is added to root priors for exploration.
+"""
 function search_with_stats(
     mcts::MCTSSearch,
     root_state::GameState,
@@ -119,6 +168,11 @@ function search_with_stats(
     return best_action, counts
 end
 
+"""
+    generate_dirichlet(rng, n, alpha) -> Vector{Float32}
+
+Sample an n-dimensional Dirichlet distribution with concentration parameter `alpha`.
+"""
 function generate_dirichlet(rng, n, alpha)
     samples = Float32[]
     for _ in 1:n
@@ -150,6 +204,12 @@ function sample_gamma(rng, alpha)
     end
 end
 
+"""
+    select_and_expand(mcts, root) -> (leaf, path)
+
+Traverse the tree using PUCT, expanding leaf nodes when encountering
+unexpanded or terminal positions.
+"""
 function select_and_expand(mcts::MCTSSearch, root::MCTSNode)
     path = MCTSNode[]
     current = root
@@ -167,6 +227,12 @@ function select_and_expand(mcts::MCTSSearch, root::MCTSNode)
     end
 end
 
+"""
+    expand(mcts, node)
+
+Expand a leaf node by evaluating it with the neural network and creating
+child nodes for all legal actions.
+"""
 function expand(mcts::MCTSSearch, node::MCTSNode)
     actions = legal_actions(node.state)
     isempty(actions) && return
@@ -181,6 +247,14 @@ function expand(mcts::MCTSSearch, node::MCTSNode)
     end
 end
 
+"""
+    select_puct(mcts, node) -> Int
+
+Select the child action with the highest PUCT score:
+    U = Q + c_puct * P * sqrt(N_parent) / (1 + N_child)
+
+Transposition table hits use cached Q/visits instead of the raw child values.
+"""
 function select_puct(mcts::MCTSSearch, node::MCTSNode)
     best_score = -Float32(Inf)
     best_action = 0
@@ -207,6 +281,13 @@ function select_puct(mcts::MCTSSearch, node::MCTSNode)
     return best_action
 end
 
+"""
+    backup(path, leaf_value, mcts)
+
+Backpropagate the leaf evaluation through the search path with sign inversion
+at each level (standard AlphaZero backup).
+Updates the transposition table with averaged Q and visit counts.
+"""
 function backup(path::Vector{MCTSNode}, leaf_value::Float32, mcts::MCTSSearch)
     value = leaf_value
     for idx in length(path):-1:1

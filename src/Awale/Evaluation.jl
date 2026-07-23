@@ -1,3 +1,9 @@
+"""
+    Evaluation
+
+Agent definitions and match evaluation: agent types (random, heuristic, model),
+match play, opening suite generation, and batched agent evaluation.
+"""
 module Evaluation
 
 using ..State: GameState, initial_state, GameConfig
@@ -23,7 +29,16 @@ function result_from_cutoff_state(state::GameState)::Int
     return 0
 end
 
-# Preserve the legacy 2-value destructuring contract while exposing cutoff explicitly as a field.
+"""
+    MatchOutcome
+
+Result of a single match: winner, turns played, and whether it ended by cutoff.
+
+# Fields
+- result::Int — 1 (P1 wins), -1 (P2 wins), 0 (draw)
+- turns_played::Int — number of turns before termination
+- cutoff::Bool — true if the match hit max_turns without a terminal state
+"""
 struct MatchOutcome
     result::Int
     turns_played::Int
@@ -33,6 +48,11 @@ end
 Base.iterate(outcome::MatchOutcome) = (outcome.result, 1)
 Base.iterate(outcome::MatchOutcome, state::Int) = state == 1 ? (outcome.turns_played, 2) : nothing
 
+"""
+    RandomAgent
+
+Agent that selects uniformly among legal actions. Baseline for comparison.
+"""
 struct RandomAgent end
 
 function select_action(::RandomAgent, s::GameState, rng=Random.default_rng())
@@ -40,6 +60,12 @@ function select_action(::RandomAgent, s::GameState, rng=Random.default_rng())
     return actions[rand(rng, 1:length(actions))]
 end
 
+"""
+    HeuristicAgent
+
+Greedy agent that picks the action maximizing immediate captures.
+Simple heuristic baseline for comparison.
+"""
 struct HeuristicAgent end
 
 function select_action(::HeuristicAgent, s::GameState, rng=Random.default_rng())
@@ -65,6 +91,12 @@ function select_action(::HeuristicAgent, s::GameState, rng=Random.default_rng())
     return best_action
 end
 
+"""
+    ModelAgent
+
+Neural network agent that uses MCTS to select actions.
+Wraps an `MCTSSearch` instance with a fixed simulation budget.
+"""
 struct ModelAgent
     mcts::MCTSSearch
     sims::Int
@@ -74,6 +106,12 @@ function select_action(agent::ModelAgent, s::GameState, rng=Random.default_rng()
     return search(agent.mcts, s, agent.sims, rng; add_root_noise=false)
 end
 
+"""
+    play_match_from_state(initial_state, agent_p1, agent_p2, rng; max_turns) -> MatchOutcome
+
+Play a match starting from a given state, alternating agents.
+Returns a `MatchOutcome` with result, turn count, and cutoff flag.
+"""
 function play_match_from_state(initial_state::GameState, agent_p1, agent_p2, rng=Random.default_rng(); max_turns::Int=1000)
     state = initial_state
     turn = 1
@@ -92,10 +130,21 @@ function play_match_from_state(initial_state::GameState, agent_p1, agent_p2, rng
     return MatchOutcome(result, turns_played, cutoff)
 end
 
+"""
+    play_match(agent_p1, agent_p2, config, rng; max_turns) -> MatchOutcome
+
+Play a match from the initial position with the given game config.
+"""
 function play_match(agent_p1, agent_p2, config::GameConfig=GameConfig(), rng=Random.default_rng(); max_turns::Int=1000)
     return play_match_from_state(initial_state(config), agent_p1, agent_p2, rng; max_turns=max_turns)
 end
 
+"""
+    generate_opening_suite(; plies, openings_per_ply, seed, config) -> Vector{GameState}
+
+Generate a reproducible set of opening positions for agent evaluation.
+For each ply depth, creates `openings_per_ply` random positions.
+"""
 function generate_opening_suite(; plies::Vector{Int}, openings_per_ply::Int, seed::Int, config::GameConfig=GameConfig())
     rng = MersenneTwister(seed)
     openings = GameState[]
@@ -117,6 +166,12 @@ function generate_opening_suite(; plies::Vector{Int}, openings_per_ply::Int, see
     return openings
 end
 
+"""
+    evaluate_agents_on_openings(agent1, agent2, openings, n_games, rng; max_turns) -> NamedTuple
+
+Evaluate two agents across a suite of opening positions, swapping sides.
+Returns a named tuple with wins, losses, draws, and average turns.
+"""
 function evaluate_agents_on_openings(agent1, agent2, openings, n_games::Int, rng=Random.default_rng(); max_turns::Int=1000)
     wins = 0
     losses = 0
@@ -145,6 +200,12 @@ function evaluate_agents_on_openings(agent1, agent2, openings, n_games::Int, rng
     return (wins=wins, losses=losses, draws=draws, avg_turns=total_turns / n_games)
 end
 
+"""
+    evaluate_agents(agent1, agent2, n_games, config, rng; max_turns) -> NamedTuple
+
+Evaluate two agents across `n_games` from the initial position, swapping sides.
+Returns a named tuple with wins, losses, draws, and average turns.
+"""
 function evaluate_agents(agent1, agent2, n_games::Int, config::GameConfig=GameConfig(), rng=Random.default_rng(); max_turns::Int=1000)
     wins = 0
     losses = 0

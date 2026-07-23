@@ -1,3 +1,8 @@
+"""
+    ReplayBuffers
+
+Experience replay buffer for off-policy training with chronologically-aware sampling.
+"""
 module ReplayBuffers
 
 using ..State: GameState
@@ -5,24 +10,51 @@ using Random
 
 export Experience, ReplayBuffer, push_experience!, chronological_indices, sample_batch
 
+"""
+    Experience
+
+A single training sample: board state, target policy, and target value.
+"""
 struct Experience
     state::GameState
     pi_target::Vector{Float32}
     z_target::Float32
 end
 
+"""
+    ReplayBuffer
+
+Circular experience replay buffer with fixed capacity.
+When full, new experiences overwrite the oldest entry (cursor-based).
+
+# Fields
+- capacity::Int — maximum number of experiences
+- buffer::Vector{Experience} — stored experiences
+- cursor::Int — next write position (circular)
+"""
 mutable struct ReplayBuffer
     capacity::Int
     buffer::Vector{Experience}
     cursor::Int
 end
 
+"""
+    ReplayBuffer(capacity::Int)
+
+Create an empty replay buffer with the given capacity.
+"""
 function ReplayBuffer(capacity::Int)
     return ReplayBuffer(capacity, Experience[], 1)
 end
 
 Base.length(rb::ReplayBuffer) = length(rb.buffer)
 
+"""
+    push_experience!(rb::ReplayBuffer, exp::Experience)
+
+Add an experience to the buffer. Appends until capacity, then overwrites
+the oldest entry (cursor-based circular).
+"""
 function push_experience!(rb::ReplayBuffer, exp::Experience)
     if length(rb) < rb.capacity
         push!(rb.buffer, exp)
@@ -32,6 +64,11 @@ function push_experience!(rb::ReplayBuffer, exp::Experience)
     end
 end
 
+"""
+    chronological_indices(rb::ReplayBuffer) -> Vector{Int}
+
+Return buffer indices in chronological order (oldest first).
+"""
 function chronological_indices(rb::ReplayBuffer)::Vector{Int}
     if length(rb) < rb.capacity
         return collect(1:length(rb))
@@ -47,6 +84,12 @@ function sample_without_replacement(pool::Vector{Int}, count::Int, rng)
     return pool[randperm(rng, length(pool))[1:actual_count]]
 end
 
+"""
+    sample_batch(rb::ReplayBuffer, batch_size::Int, rng; recent_fraction, recent_window) -> Vector{Experience}
+
+Sample a minibatch from the replay buffer, mixing recent and historical experiences
+according to `recent_fraction`. Returns an empty vector if the buffer is empty.
+"""
 function sample_batch(
     rb::ReplayBuffer,
     batch_size::Int,
