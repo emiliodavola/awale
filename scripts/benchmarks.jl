@@ -6,6 +6,12 @@ using .Awale.Model
 using Random
 using StaticArrays
 
+"""
+    setup_benchmarks() -> Tuple
+
+Set up benchmark fixtures: an initial game state, an MCTS searcher,
+and a pre-built 3-level MCTS tree root.
+"""
 function setup_benchmarks()
     config = Awale.GameConfig()
     s = Awale.initial_state(config)
@@ -28,6 +34,12 @@ function setup_benchmarks()
     return (s, mcts, root)
 end
 
+"""
+    main()
+
+Entry point for the microbenchmark script.
+Runs @btime benchmarks for state encoding, PUCT selection, and MCTS backup.
+"""
 function main()
     println("--- Microbenchmarks ---")
     (s, mcts, root) = setup_benchmarks()

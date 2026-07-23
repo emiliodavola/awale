@@ -26,18 +26,39 @@ MODEL_CONFIG_PATH = abspath(ROOT_DIR, String(get(training_cfg, "model_config_pat
 
 struct HumanAgent end
 
+"""
+    resolve_path(path::AbstractString) -> String
+
+Resolve a potentially relative path against the repository root.
+"""
 function resolve_path(path::AbstractString)::String
     return isabspath(path) ? String(path) : joinpath(ROOT_DIR, String(path))
 end
 
+"""
+    model_architecture_name() -> String
+
+Return the architecture name from the model configuration TOML.
+"""
 function model_architecture_name()
     return Awale.Model.model_architecture(TOML.parsefile(MODEL_CONFIG_PATH)["model"])
 end
 
+"""
+    checkpoint_candidates(configured_path, default_filename) -> Vector{String}
+
+Return ordered candidate checkpoint paths, resolved against the repo root.
+"""
 function checkpoint_candidates(configured_path::AbstractString, default_filename::AbstractString)
     return [resolve_path(path) for path in architecture_scoped_candidates(CHECKPOINT_DIR, model_architecture_name(), configured_path, default_filename)]
 end
 
+"""
+    resolve_checkpoint_path(spec::AbstractString) -> String
+
+Resolve an agent spec ("best", "last", "final", or an explicit path) to
+a checkpoint file path.
+"""
 function resolve_checkpoint_path(spec::AbstractString)::String
     normalized = lowercase(strip(spec))
     if normalized == "best"
@@ -57,6 +78,11 @@ function resolve_checkpoint_path(spec::AbstractString)::String
     return resolve_path(spec)
 end
 
+"""
+    agent_label(spec::AbstractString) -> String
+
+Derive a display label for an agent specification string.
+"""
 function agent_label(spec::AbstractString)::String
     normalized = lowercase(strip(spec))
     if normalized == "human"
@@ -68,16 +94,31 @@ function agent_label(spec::AbstractString)::String
     return basename(spec)
 end
 
+"""
+    format_cell(label, seeds) -> String
+
+Format a board pit cell as `[LL:SS]` for terminal display.
+"""
 function format_cell(label::Int, seeds)::String
     return "[" * lpad(string(label), 2) * ":" * lpad(string(Int(seeds)), 2) * "]"
 end
 
+"""
+    print_legend(bottom_player::Int)
+
+Print a legend explaining which player is at the bottom and top of the board display.
+"""
 function print_legend(bottom_player::Int)
     top_player = bottom_player == 1 ? 2 : 1
     println("Legend: P$bottom_player at the bottom, P$top_player at the top. Sowing is counterclockwise.")
     println("         The top row is shown in reverse order to follow the seed path.")
 end
 
+"""
+    print_board(s::GameState; bottom_player::Int=1)
+
+Render the Awale board to the terminal with pit labels and seed counts.
+"""
 function print_board(s::GameState; bottom_player::Int=1)
     top_player = bottom_player == 1 ? 2 : 1
 
@@ -101,6 +142,11 @@ function print_board(s::GameState; bottom_player::Int=1)
     println("                 Turn: P$(Int(s.to_move))")
 end
 
+"""
+    prompt_human_action(s::GameState) -> Int
+
+Prompt a human player for a legal move via stdin. Supports 'h' for help and 'q' to quit.
+"""
 function prompt_human_action(s::GameState)
     legal = legal_actions(s)
     println("Legal moves: $(join(legal, ", "))")
@@ -138,6 +184,12 @@ function prompt_human_action(s::GameState)
     end
 end
 
+"""
+    resolve_agent(spec::AbstractString, sims::Int) -> Tuple{Any, String}
+
+Resolve an agent spec string ("human", "best", "last", "final", or path)
+to an agent instance and its display label.
+"""
 function resolve_agent(spec::AbstractString, sims::Int)
     normalized = lowercase(strip(spec))
     if normalized == "human"
@@ -152,6 +204,12 @@ function resolve_agent(spec::AbstractString, sims::Int)
     return ModelAgent(mcts, sims), agent_label(spec)
 end
 
+"""
+    final_result(s::GameState) -> Int
+
+Compute the match result from player 1's perspective: 1 (win), -1 (loss), or 0 (draw).
+Delegates to `result_from_terminal_state` or `result_from_cutoff_state`.
+"""
 function final_result(s::GameState)::Int
     if is_terminal(s)
         return result_from_terminal_state(s)
@@ -160,6 +218,11 @@ function final_result(s::GameState)::Int
     return result_from_cutoff_state(s)
 end
 
+"""
+    print_help()
+
+Print usage information for the play.jl script.
+"""
 function print_help()
     println("Awale terminal play")
     println()
@@ -184,6 +247,12 @@ function print_help()
     println("  julia --project=. play.jl --agent1 checkpoints/model_best.bin --agent2 human --deterministic")
 end
 
+"""
+    parse_args(args::Vector{String}) -> Union{Nothing, Dict{String, String}}
+
+Parse command-line arguments for the play.jl script.
+Returns `nothing` if `--help` was requested.
+"""
 function parse_args(args::Vector{String})
     opts = Dict{String, String}("agent1" => DEFAULT_AGENT1_SPEC, "agent2" => DEFAULT_AGENT2_SPEC, "sims" => string(DEFAULT_SIMS), "max-turns" => string(MAX_TURNS))
     i = 1
@@ -207,21 +276,42 @@ function parse_args(args::Vector{String})
     return opts
 end
 
+"""
+    parse_int_option(name, value) -> Int
+
+Parse an integer CLI option, throwing `ArgumentError` on invalid input.
+"""
 function parse_int_option(name::AbstractString, value::AbstractString)::Int
     parsed = tryparse(Int, strip(value))
     parsed === nothing && throw(ArgumentError("$name must be an integer, got: '$value'"))
     return parsed
 end
 
+"""
+    exhibition_stochastic(opts) -> Bool
+
+Check whether the exhibition match should use stochastic (noisy) move selection.
+"""
 function exhibition_stochastic(opts::Dict{String, String})::Bool
     return !haskey(opts, "deterministic")
 end
 
+"""
+    print_turn_banner(turn_no, player, label)
+
+Print a turn header showing turn number, current player, and agent label.
+"""
 function print_turn_banner(turn_no::Int, player::Int, label::String)
     println()
     println("=== TURN $turn_no | P$player | agent: $label ===")
 end
 
+"""
+    read_human_choice() -> String
+
+Read a single line of human input from stdin, trimmed and lowercased.
+Throws `InterruptException` on EOF.
+"""
 function read_human_choice()::String
     try
         return lowercase(strip(readline()))
@@ -233,11 +323,22 @@ function read_human_choice()::String
     end
 end
 
+"""
+    print_turn_action(player, action)
+
+Print which player moved from which pit.
+"""
 function print_turn_action(player::Int, action::Int)
     println("P$player moves from pit $action")
     println("Move: $action")
 end
 
+"""
+    select_exhibition_action(agent, state, rng; stochastic) -> Int
+
+Select an action for exhibition play: humans are prompted, stochastic model
+agents use noisy search, and deterministic model agents use argmax selection.
+"""
 function select_exhibition_action(agent, state::GameState, rng; stochastic::Bool)
     if agent isa HumanAgent
         return prompt_human_action(state)
@@ -248,10 +349,21 @@ function select_exhibition_action(agent, state::GameState, rng; stochastic::Bool
     end
 end
 
+"""
+    print_turn_separator()
+
+Print a visual separator between turns in the terminal display.
+"""
 function print_turn_separator()
     println(repeat("-", 40))
 end
 
+"""
+    play_match_with_logs(agent1, label1, agent2, label2; config, max_turns, bottom_player, rng, stochastic) -> Union{Int, Nothing}
+
+Play an exhibition match between two agents with verbose terminal logging.
+Returns the result (1, -1, 0) or `nothing` if the game was aborted.
+"""
 function play_match_with_logs(agent1, label1::String, agent2, label2::String; config::GameConfig=GameConfig(), max_turns::Int=MAX_TURNS, bottom_player::Int=1, rng=Random.default_rng(), stochastic::Bool=true)
     state = initial_state(config)
     turns_played = 0
@@ -307,6 +419,12 @@ function play_match_with_logs(agent1, label1::String, agent2, label2::String; co
     return result
 end
 
+"""
+    main(args::Vector{String}=Base.ARGS)
+
+Entry point for the play.jl exhibition script. Parses CLI arguments,
+resolves agents, and runs the match with verbose logging.
+"""
 function main(args::Vector{String}=Base.ARGS)
     opts = parse_args(args)
     opts === nothing && return print_help()
