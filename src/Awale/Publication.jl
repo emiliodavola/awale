@@ -377,10 +377,21 @@ function release_bundle_dir(checkpoint_dir::AbstractString, architecture::Abstra
     return joinpath(String(checkpoint_dir), RELEASE_SUBDIR, String(release_id))
 end
 
+"""
+    expected_release_checkpoint_dir(root_dir, architecture) -> String
+
+Return the canonical checkpoint directory for a given architecture.
+"""
 function expected_release_checkpoint_dir(root_dir::AbstractString, architecture::AbstractString)::String
     return resolve_repo_path(root_dir, joinpath("checkpoints", architecture_slug(architecture)))
 end
 
+"""
+    expected_release_artifact_paths(checkpoint_dir, architecture, release_id) -> Dict{String, String}
+
+Build a dictionary of expected absolute paths for all release artifacts
+(config snapshots, training state, model checkpoints).
+"""
 function expected_release_artifact_paths(checkpoint_dir::AbstractString, architecture::AbstractString, release_id::AbstractString)
     arch = architecture_slug(architecture)
     return Dict{String, String}(
@@ -393,14 +404,29 @@ function expected_release_artifact_paths(checkpoint_dir::AbstractString, archite
     )
 end
 
+"""
+    runtime_config_snapshot_path(log_dir, architecture, release_id) -> String
+
+Return the expected path for a runtime configuration snapshot file.
+"""
 function runtime_config_snapshot_path(log_dir::AbstractString, architecture::AbstractString, release_id::AbstractString)::String
     return joinpath(String(log_dir), "training_config_$(architecture_slug(architecture))_$(release_id).toml")
 end
 
+"""
+    model_config_snapshot_path(log_dir, architecture, release_id) -> String
+
+Return the expected path for a model configuration snapshot file.
+"""
 function model_config_snapshot_path(log_dir::AbstractString, architecture::AbstractString, release_id::AbstractString)::String
     return joinpath(String(log_dir), "model_config_$(architecture_slug(architecture))_$(release_id).toml")
 end
 
+"""
+    write_release_summary(path; commit_sha, architecture, release_id, timestamp, checkpoint_dir, kwargs...) -> String
+
+Write a release summary TOML file at `path` with run metadata, artifact paths, and training metrics.
+"""
 function write_release_summary(
     path::AbstractString;
     commit_sha::AbstractString,
@@ -460,11 +486,23 @@ function write_release_summary(
     return path
 end
 
+"""
+    read_release_summary(path::AbstractString) -> Dict{String, Any}
+
+Parse a release summary TOML file and return its contents.
+Throws `ArgumentError` if the file does not exist.
+"""
 function read_release_summary(path::AbstractString)::Dict{String, Any}
     isfile(path) || throw(ArgumentError("Missing release summary: $path"))
     return TOML.parsefile(path)
 end
 
+"""
+    release_model_card(summary, artifact_specs; bundle_kind, model_export_format) -> String
+
+Generate the full text of a Hugging Face model card (README.md) from a release summary
+and artifact specifications.
+"""
 function release_model_card(summary::Dict{String, Any}, artifact_specs::Dict{String, String}; bundle_kind::AbstractString, model_export_format::AbstractString)::String
     sections = release_summary_sections(summary)
     release_id = String(sections.run["release_id"])
@@ -531,6 +569,11 @@ function release_model_card(summary::Dict{String, Any}, artifact_specs::Dict{Str
     return String(take!(io))
 end
 
+"""
+    write_release_model_card(bundle_dir, summary, artifact_specs; bundle_kind, model_export_format) -> String
+
+Atomically write a model card README.md to `bundle_dir` using the release summary.
+"""
 function write_release_model_card(bundle_dir::AbstractString, summary::Dict{String, Any}, artifact_specs::Dict{String, String}; bundle_kind::AbstractString, model_export_format::AbstractString)::String
     path = release_model_card_path(bundle_dir)
     atomic_write(path) do io
@@ -539,6 +582,13 @@ function write_release_model_card(bundle_dir::AbstractString, summary::Dict{Stri
     return path
 end
 
+"""
+    required_release_keys(summary::Dict{String, Any})
+
+Validate that a parsed release summary contains all required sections and keys
+([run], [paths], [metrics] and their mandatory fields).
+Throws `ArgumentError` for any missing key.
+"""
 function required_release_keys(summary::Dict{String, Any})
     haskey(summary, "run") || throw(ArgumentError("Release summary missing [run]"))
     haskey(summary, "paths") || throw(ArgumentError("Release summary missing [paths]"))
@@ -563,6 +613,13 @@ function required_release_keys(summary::Dict{String, Any})
     return nothing
 end
 
+"""
+    bundle_artifact_specs(summary, root_dir, summary_path, checkpoint_dir; public=false) -> Dict{String, String}
+
+Build a dictionary mapping bundle-relative artifact paths to their source (absolute) paths.
+Validates that the summary paths match the expected layout.
+When `public=true`, model checkpoints are renamed with `.f32` extension.
+"""
 function bundle_artifact_specs(summary::Dict{String, Any}, root_dir::AbstractString, summary_path::AbstractString, checkpoint_dir::AbstractString; public::Bool=false)
     run = summary["run"]
     paths = summary["paths"]
@@ -594,6 +651,12 @@ function bundle_artifact_specs(summary::Dict{String, Any}, root_dir::AbstractStr
     )
 end
 
+"""
+    bundle_manifest(summary, artifact_specs, bundle_dir; bundle_kind, model_export_format) -> Dict{String, Any}
+
+Build the full bundle manifest dictionary including run metadata, artifact labels,
+and integrity checksums (SHA-256 + byte size) for every artifact.
+"""
 function bundle_manifest(summary::Dict{String, Any}, artifact_specs::Dict{String, String}, bundle_dir::AbstractString; bundle_kind::AbstractString, model_export_format::AbstractString)
     sections = release_summary_sections(summary)
 
@@ -629,6 +692,13 @@ function bundle_manifest(summary::Dict{String, Any}, artifact_specs::Dict{String
     )
 end
 
+"""
+    copy_artifact!(source, destination) -> destination
+
+Copy a release artifact file from `source` to `destination`, creating parent directories.
+Throws `ArgumentError` if the source file does not exist.
+Returns immediately (no-op) if source and destination are the same file.
+"""
 function copy_artifact!(source::AbstractString, destination::AbstractString)
     isfile(source) || throw(ArgumentError("Missing release artifact: $source"))
     abspath(source) == abspath(destination) && return destination
@@ -637,11 +707,25 @@ function copy_artifact!(source::AbstractString, destination::AbstractString)
     return destination
 end
 
+"""
+    stage_release_artifact!(source_path, destination_path; public=false) -> destination
+
+Stage a release artifact: when `public=true` and the destination ends with `.f32`,
+the model is exported via `save_public_model` (Float32 weights only). Otherwise,
+the file is copied as-is.
+"""
 function stage_release_artifact!(source_path::AbstractString, destination_path::AbstractString; public::Bool=false)
     public && endswith(destination_path, PUBLIC_MODEL_FILE_EXT) && return save_public_model(load_model(source_path), destination_path)
     return copy_artifact!(source_path, destination_path)
 end
 
+"""
+    bundle_is_valid(bundle_dir, artifact_specs; bundle_kind, model_export_format) -> Bool
+
+Check whether an existing bundle directory is valid: contains the expected files,
+has a parseable manifest with matching bundle_kind and model_export_format, correct artifact
+labels, and integrity checksums that match the on-disk files.
+"""
 function bundle_is_valid(bundle_dir::AbstractString, artifact_specs::Dict{String, String}; bundle_kind::AbstractString, model_export_format::AbstractString)::Bool
     manifest_path = joinpath(String(bundle_dir), MANIFEST_FILE)
     isfile(manifest_path) || return false
@@ -683,12 +767,23 @@ function bundle_is_valid(bundle_dir::AbstractString, artifact_specs::Dict{String
     return true
 end
 
+"""
+    reset_bundle_dir!(bundle_dir) -> bundle_dir
+
+Remove and recreate a bundle directory, ensuring a clean slate for staging.
+"""
 function reset_bundle_dir!(bundle_dir::AbstractString)
     ispath(bundle_dir) && rm(bundle_dir; force=true, recursive=true)
     mkpath(bundle_dir)
     return bundle_dir
 end
 
+"""
+    stage_bundle_artifacts(bundle_dir, artifact_specs; public=false) -> bundle_dir
+
+Copy all artifacts from their source paths into the bundle directory.
+When `public=true`, model files are exported as Float32 weight vectors.
+"""
 function stage_bundle_artifacts(bundle_dir::AbstractString, artifact_specs::Dict{String, String}; public::Bool=false)
     for (bundle_relpath, source_path) in artifact_specs
         destination = bundle_artifact_path(bundle_dir, bundle_relpath)
@@ -697,6 +792,11 @@ function stage_bundle_artifacts(bundle_dir::AbstractString, artifact_specs::Dict
     return bundle_dir
 end
 
+"""
+    write_release_bundle(bundle_dir, summary, artifact_specs; bundle_kind, model_export_format) -> bundle_dir
+
+Write the model card and manifest TOML into a prepared bundle directory.
+"""
 function write_release_bundle(bundle_dir::AbstractString, summary::Dict{String, Any}, artifact_specs::Dict{String, String}; bundle_kind::AbstractString, model_export_format::AbstractString)
     write_release_model_card(bundle_dir, summary, artifact_specs; bundle_kind=bundle_kind, model_export_format=model_export_format)
     atomic_write(joinpath(bundle_dir, MANIFEST_FILE)) do io
@@ -705,6 +805,13 @@ function write_release_bundle(bundle_dir::AbstractString, summary::Dict{String, 
     return bundle_dir
 end
 
+"""
+    plan_release_bundle(summary_path; root_dir) -> (bundle_dir, artifact_specs, summary)
+
+Read and validate a release summary, resolve all artifact paths against the repo root,
+and return the planned bundle layout without writing anything. All source artifacts
+are verified to exist on disk.
+"""
 function plan_release_bundle(summary_path::AbstractString; root_dir::AbstractString=DEFAULT_ROOT_DIR)
     summary = read_release_summary(summary_path)
     required_release_keys(summary)
@@ -725,6 +832,13 @@ function plan_release_bundle(summary_path::AbstractString; root_dir::AbstractStr
     return (bundle_dir=bundle_dir, artifact_specs=artifact_specs, summary=summary)
 end
 
+"""
+    stage_release_bundle(summary_path; root_dir) -> bundle_dir
+
+Build (or return cached) a local-trusted release bundle: reads the summary,
+validates artifact paths, resets the bundle dir, stages all artifacts, and
+writes the model card + manifest. Skips rebuilding if the bundle is already valid.
+"""
 function stage_release_bundle(summary_path::AbstractString; root_dir::AbstractString=DEFAULT_ROOT_DIR)
     planned = plan_release_bundle(summary_path; root_dir=root_dir)
     bundle_dir = planned.bundle_dir
@@ -760,6 +874,11 @@ function stage_release_bundle(summary_path::AbstractString; root_dir::AbstractSt
     return write_release_bundle(bundle_dir, summary, planned.artifact_specs; bundle_kind="local_trusted", model_export_format="serialization")
 end
 
+"""
+    stage_public_release_bundle(summary_path; root_dir) -> bundle_dir
+
+Build (or return cached) a public-safe release bundle with Float32-exported weights.
+"""
 function stage_public_release_bundle(summary_path::AbstractString; root_dir::AbstractString=DEFAULT_ROOT_DIR)
     planned = plan_release_bundle(summary_path; root_dir=root_dir)
     run = planned.summary["run"]
@@ -774,23 +893,50 @@ function stage_public_release_bundle(summary_path::AbstractString; root_dir::Abs
     return write_release_bundle(bundle_dir, planned.summary, artifact_specs; bundle_kind="public_safe", model_export_format="float32")
 end
 
+"""
+    default_repo_path(architecture, release_id) -> String
+
+Return the default remote repository path for a release on Hugging Face.
+"""
 function default_repo_path(architecture::AbstractString, release_id::AbstractString)::String
     return repo_relpath("releases", architecture_slug(architecture), release_id)
 end
 
+"""
+    hf_upload_command(repo_id, local_path, repo_path) -> Cmd
+
+Build the `hf upload` command for uploading a file or directory to Hugging Face.
+"""
 function hf_upload_command(repo_id::AbstractString, local_path::AbstractString, repo_path::AbstractString)
     return `hf upload $repo_id $local_path $repo_path`
 end
 
+"""
+    publish_model_card_upload_target(bundle_dir) -> NamedTuple
+
+Return the local path and remote repo path for the model card README.md upload.
+"""
 function publish_model_card_upload_target(bundle_dir::AbstractString)
     return (local_path=joinpath(String(bundle_dir), MODEL_CARD_FILE), repo_path=MODEL_CARD_FILE)
 end
 
+"""
+    publish_model_card_command(repo_id, bundle_dir) -> Cmd
+
+Build the `hf upload` command to publish only the model card README.md.
+"""
 function publish_model_card_command(repo_id::AbstractString, bundle_dir::AbstractString)
     target = publish_model_card_upload_target(bundle_dir)
     return hf_upload_command(repo_id, target.local_path, target.repo_path)
 end
 
+"""
+    publish_release_bundle(summary_path, repo_id; repo_path, root_dir, upload_runner) -> bundle_dir
+
+Full release pipeline: stage the public release bundle, upload the model card,
+then upload the full bundle to a Hugging Face repo.
+`upload_runner` defaults to `run` and can be replaced for dry-run or testing.
+"""
 function publish_release_bundle(summary_path::AbstractString, repo_id::AbstractString; repo_path::Union{Nothing, AbstractString}=nothing, root_dir::AbstractString=DEFAULT_ROOT_DIR, upload_runner::Function=run)
     summary = read_release_summary(summary_path)
     required_release_keys(summary)
