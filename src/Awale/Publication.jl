@@ -1,3 +1,9 @@
+"""
+    Publication
+
+Release bundling and publication: model cards, bundle manifests, artifact staging,
+and Hugging Face upload commands.
+"""
 module Publication
 
 using Dates
@@ -33,22 +39,49 @@ const MODEL_CARD_GENERATOR_VERSION = 1
 const PUBLIC_MODEL_FILE_EXT = ".f32"
 const DEFAULT_ROOT_DIR = abspath(joinpath(@__DIR__, "..", ".."))
 
+"""
+    release_timestamp(now::DateTime=Dates.now()) -> String
+
+Format the current time (or `now`) as an ISO-8601 timestamp string.
+"""
 function release_timestamp(now::DateTime=Dates.now())::String
     return Dates.format(now, "yyyy-mm-ddTHH:MM:SS")
 end
 
+"""
+    release_id_slug(now::DateTime=Dates.now()) -> String
+
+Generate a filesystem-safe release identifier from the current timestamp.
+"""
 function release_id_slug(now::DateTime=Dates.now())::String
     return Dates.format(now, "yyyymmdd_HHMMSS")
 end
 
+"""
+    posix_join(parts...) -> String
+
+Join path parts with forward slashes (/), producing a POSIX-style path regardless of OS.
+"""
 function posix_join(parts...)::String
     return join(String.(parts), "/")
 end
 
+"""
+    repo_relpath(parts...) -> String
+
+Join path parts into a repository-relative POSIX path.
+Convenience wrapper around `posix_join` for semantic clarity.
+"""
 function repo_relpath(parts...)::String
     return posix_join(parts...)
 end
 
+"""
+    path_within_root(root_dir::AbstractString, candidate::AbstractString) -> Bool
+
+Check whether `candidate` resolves to a path inside `root_dir`.
+Returns `false` if `candidate` escapes the root via `..` components.
+"""
 function path_within_root(root_dir::AbstractString, candidate::AbstractString)::Bool
     root = abspath(String(root_dir))
     resolved = abspath(String(candidate))
@@ -62,6 +95,12 @@ function path_within_root(root_dir::AbstractString, candidate::AbstractString)::
     return isempty(parts) || first(parts) != ".."
 end
 
+"""
+    resolve_repo_path(root_dir, repo_path) -> String
+
+Resolve a path relative to the repository root, normalizing separators.
+Throws `ArgumentError` if the resolved path escapes the workspace root.
+"""
 function resolve_repo_path(root_dir::AbstractString, repo_path::AbstractString)::String
     normalized = replace(String(repo_path), '\\' => '/')
     root = abspath(String(root_dir))
@@ -70,22 +109,48 @@ function resolve_repo_path(root_dir::AbstractString, repo_path::AbstractString):
     return candidate
 end
 
+"""
+    release_namespace_dir(checkpoint_dir, architecture) -> String
+
+Return the architecture-scoped checkpoint directory under `checkpoint_dir`.
+"""
 function release_namespace_dir(checkpoint_dir::AbstractString, architecture::AbstractString)::String
     return joinpath(String(checkpoint_dir), architecture_slug(architecture))
 end
 
+"""
+    release_summary_path(checkpoint_dir, architecture, release_id) -> String
+
+Return the expected path of a release summary file within the architecture-scoped checkpoint tree.
+"""
 function release_summary_path(checkpoint_dir::AbstractString, architecture::AbstractString, release_id::AbstractString)::String
     return joinpath(release_namespace_dir(checkpoint_dir, architecture), RELEASE_SUBDIR, String(release_id), RELEASE_SUMMARY_FILE)
 end
 
+"""
+    release_bundle_summary_path(checkpoint_dir, release_id) -> String
+
+Return the expected path of a release summary within the flat (non-architecture-scoped) bundle tree.
+"""
 function release_bundle_summary_path(checkpoint_dir::AbstractString, release_id::AbstractString)::String
     return joinpath(String(checkpoint_dir), RELEASE_SUBDIR, String(release_id), RELEASE_SUMMARY_FILE)
 end
 
+"""
+    release_model_card_path(bundle_dir) -> String
+
+Return the README.md path inside a release bundle directory.
+"""
 function release_model_card_path(bundle_dir::AbstractString)::String
     return joinpath(String(bundle_dir), MODEL_CARD_FILE)
 end
 
+"""
+    write_model_card_front_matter(io::IO, summary::Dict{String, Any})
+
+Write YAML front-matter for a Hugging Face model card to `io`, extracting
+metrics and metadata from the release summary.
+"""
 function write_model_card_front_matter(io::IO, summary::Dict{String, Any})
     sections = release_summary_sections(summary)
     release_id = String(sections.run["release_id"])
@@ -128,10 +193,22 @@ function write_model_card_front_matter(io::IO, summary::Dict{String, Any})
     println(io)
 end
 
+"""
+    public_release_bundle_dir(checkpoint_dir, architecture, release_id) -> String
+
+Return the directory for a public (Float32-exported) release bundle, nested under
+the release bundle dir.
+"""
 function public_release_bundle_dir(checkpoint_dir::AbstractString, architecture::AbstractString, release_id::AbstractString)::String
     return joinpath(release_bundle_dir(checkpoint_dir, architecture, release_id), "public")
 end
 
+"""
+    artifact_label(bundle_relpath) -> String
+
+Derive a human-readable label from a bundle-relative artifact path
+for use in the bundle manifest.
+"""
 function artifact_label(bundle_relpath::AbstractString)::String
     artifact_file = basename(bundle_relpath)
     artifact_file == RELEASE_SUMMARY_FILE && return "release_summary"
@@ -142,6 +219,12 @@ function artifact_label(bundle_relpath::AbstractString)::String
     return stem
 end
 
+"""
+    artifact_checksum(path::AbstractString) -> Dict{String, Any}
+
+Compute SHA-256 and byte-size for a release artifact file.
+Throws `ArgumentError` if the file does not exist.
+"""
 function artifact_checksum(path::AbstractString)::Dict{String, Any}
     isfile(path) || throw(ArgumentError("Missing release artifact: $path"))
     return Dict{String, Any}(
@@ -150,6 +233,12 @@ function artifact_checksum(path::AbstractString)::Dict{String, Any}
     )
 end
 
+"""
+    artifact_destination_name(artifact_file; public=false) -> String
+
+Return the destination filename for an artifact. When `public=true`, model checkpoint
+`.bin` files are renamed with the `.f32` extension for Hugging Face releases.
+"""
 function artifact_destination_name(artifact_file::AbstractString; public::Bool=false)::String
     public || return artifact_file
     artifact_file == "model_final.bin" && return "model_final$(PUBLIC_MODEL_FILE_EXT)"
@@ -158,14 +247,31 @@ function artifact_destination_name(artifact_file::AbstractString; public::Bool=f
     return artifact_file
 end
 
+"""
+    bundle_artifact_path(bundle_dir, bundle_relpath) -> String
+
+Resolve a bundle-relative POSIX path to an absolute filesystem path.
+Splits the relative path on `/` to handle cross-platform join correctly.
+"""
 function bundle_artifact_path(bundle_dir::AbstractString, bundle_relpath::AbstractString)::String
     return joinpath(String(bundle_dir), split(bundle_relpath, '/')...)
 end
 
+"""
+    bundle_file_relpath(bundle_dir, file_path) -> String
+
+Compute a bundle-relative POSIX path for an absolute `file_path` inside `bundle_dir`.
+"""
 function bundle_file_relpath(bundle_dir::AbstractString, file_path::AbstractString)::String
     return replace(relpath(String(file_path), String(bundle_dir)), '\\' => '/')
 end
 
+"""
+    bundle_file_paths(bundle_dir) -> Set{String}
+
+Return the set of all bundle-relative file paths present in `bundle_dir`.
+Returns an empty set if the directory does not exist.
+"""
 function bundle_file_paths(bundle_dir::AbstractString)::Set{String}
     files = Set{String}()
     isdir(bundle_dir) || return files
@@ -179,12 +285,24 @@ function bundle_file_paths(bundle_dir::AbstractString)::Set{String}
     return files
 end
 
+"""
+    expected_bundle_file_paths(artifact_specs) -> Set{String}
+
+Return the complete set of files that a valid bundle should contain:
+the manifest, model card, and all artifact relpaths from the spec.
+"""
 function expected_bundle_file_paths(artifact_specs::Dict{String, String})::Set{String}
     expected = Set{String}((MANIFEST_FILE, MODEL_CARD_FILE))
     union!(expected, keys(artifact_specs))
     return expected
 end
 
+"""
+    expected_bundle_manifest_artifacts(artifact_specs) -> Dict{String, String}
+
+Build the `[artifacts]` section for the bundle manifest, mapping
+human-readable labels to bundle-relative paths.
+"""
 function expected_bundle_manifest_artifacts(artifact_specs::Dict{String, String})::Dict{String, String}
     artifact_entries = Dict{String, String}()
     for bundle_relpath in keys(artifact_specs)
@@ -194,12 +312,23 @@ function expected_bundle_manifest_artifacts(artifact_specs::Dict{String, String}
     return artifact_entries
 end
 
+"""
+    expected_bundle_integrity_paths(artifact_specs) -> Set{String}
+
+Return the set of paths that must have integrity checksums in the manifest.
+"""
 function expected_bundle_integrity_paths(artifact_specs::Dict{String, String})::Set{String}
     integrity_paths = Set{String}(keys(artifact_specs))
     push!(integrity_paths, MODEL_CARD_FILE)
     return integrity_paths
 end
 
+"""
+    dict_entries_match(actual, expected) -> Bool
+
+Check whether `actual` dictionary contains all key–value pairs from `expected`
+and has the same length (no extra keys).
+"""
 function dict_entries_match(actual::AbstractDict, expected::AbstractDict)::Bool
     length(actual) == length(expected) || return false
     for (key, value) in expected
@@ -208,10 +337,22 @@ function dict_entries_match(actual::AbstractDict, expected::AbstractDict)::Bool
     return true
 end
 
+"""
+    release_summary_sections(summary::Dict{String, Any}) -> NamedTuple
+
+Split a parsed release summary into `(run, paths, metrics)` named sections
+for convenient keyed access.
+"""
 function release_summary_sections(summary::Dict{String, Any})
     return (run=summary["run"], paths=summary["paths"], metrics=summary["metrics"])
 end
 
+"""
+    latest_release_summary_path(checkpoint_dir, architecture) -> Union{String, Nothing}
+
+Find the most recent release summary file under the architecture-scoped checkpoint tree.
+Returns `nothing` if no releases exist.
+"""
 function latest_release_summary_path(checkpoint_dir::AbstractString, architecture::AbstractString)::Union{String, Nothing}
     release_root = joinpath(release_namespace_dir(checkpoint_dir, architecture), RELEASE_SUBDIR)
     isdir(release_root) || return nothing
@@ -223,6 +364,13 @@ function latest_release_summary_path(checkpoint_dir::AbstractString, architectur
     return joinpath(release_root, release_ids[end], RELEASE_SUMMARY_FILE)
 end
 
+"""
+    release_bundle_dir(checkpoint_dir, architecture, release_id) -> String
+
+Return the directory for a release bundle, validating that the checkpoint dir
+is already architecture-scoped.
+Throws `ArgumentError` if the basename of `checkpoint_dir` does not match the architecture slug.
+"""
 function release_bundle_dir(checkpoint_dir::AbstractString, architecture::AbstractString, release_id::AbstractString)::String
     namespace = architecture_slug(architecture)
     basename(String(checkpoint_dir)) == namespace || throw(ArgumentError("Release bundle checkpoint dir must already be architecture-scoped: $checkpoint_dir"))
