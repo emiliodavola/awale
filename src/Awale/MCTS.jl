@@ -52,7 +52,9 @@ Search configuration holding the neural model and PUCT constant.
 struct MCTSSearch
     model
     c_puct::Float32
-    transposition_table::Dict{UInt64, Tuple{Float32, Int64}}
+    dirichlet_alpha::Float32
+    dirichlet_epsilon::Float32
+    transposition_table::Dict{UInt64, Tuple{Float64, Int64}}
 end
 
 """
@@ -127,9 +129,8 @@ function search_with_stats(
     root_priors = legal_action_priors(vec(logits), actions)
 
     if add_root_noise
-        dir_noise = generate_dirichlet(rng, length(actions), 0.3f0)
-        epsilon = 0.25f0
-        root_priors = ((1.0f0 - epsilon) .* root_priors) .+ (epsilon .* dir_noise)
+        dir_noise = generate_dirichlet(rng, length(actions), mcts.dirichlet_alpha)
+        root_priors = ((1.0f0 - mcts.dirichlet_epsilon) .* root_priors) .+ (mcts.dirichlet_epsilon .* dir_noise)
         root_priors ./= sum(root_priors)
     end
 

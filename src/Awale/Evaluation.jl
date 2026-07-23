@@ -112,7 +112,7 @@ end
 Play a match starting from a given state, alternating agents.
 Returns a `MatchOutcome` with result, turn count, and cutoff flag.
 """
-function play_match_from_state(initial_state::GameState, agent_p1, agent_p2, rng=Random.default_rng(); max_turns::Int=1000)
+function play_match_from_state(initial_state::GameState, agent_p1, agent_p2, rng; max_turns::Int)
     state = initial_state
     turn = 1
     turns_played = 0
@@ -135,7 +135,7 @@ end
 
 Play a match from the initial position with the given game config.
 """
-function play_match(agent_p1, agent_p2, config::GameConfig=GameConfig(), rng=Random.default_rng(); max_turns::Int=1000)
+function play_match(agent_p1, agent_p2, config, rng; max_turns::Int)
     return play_match_from_state(initial_state(config), agent_p1, agent_p2, rng; max_turns=max_turns)
 end
 
@@ -172,7 +172,7 @@ end
 Evaluate two agents across a suite of opening positions, swapping sides.
 Returns a named tuple with wins, losses, draws, and average turns.
 """
-function evaluate_agents_on_openings(agent1, agent2, openings, n_games::Int, rng=Random.default_rng(); max_turns::Int=1000)
+function evaluate_agents_on_openings(agent1, agent2, openings, n_games::Int, rng; max_turns::Int)
     wins = 0
     losses = 0
     draws = 0
@@ -206,7 +206,7 @@ end
 Evaluate two agents across `n_games` from the initial position, swapping sides.
 Returns a named tuple with wins, losses, draws, and average turns.
 """
-function evaluate_agents(agent1, agent2, n_games::Int, config::GameConfig=GameConfig(), rng=Random.default_rng(); max_turns::Int=1000)
+function evaluate_agents(agent1, agent2, n_games::Int, config, rng; max_turns::Int)
     wins = 0
     losses = 0
     draws = 0

@@ -80,14 +80,15 @@ end
 
 Play a single self-play game and return (state, pi_target, v_target) tuples
 with backfilled value targets. Sampling uses temperature annealing.
+All runtime parameters must be provided explicitly by the caller.
 """
 function collect_selfplay_data(
     mcts::MCTSSearch,
-    config::GameConfig=GameConfig(),
-    sims_per_move::Int=100,
-    temperature_moves::Int=20,
-    rng=Random.default_rng();
-    max_turns::Int=1000,
+    config::GameConfig,
+    sims_per_move::Int,
+    temperature_moves::Int,
+    rng;
+    max_turns::Int,
 )
     state = initial_state(config)
     samples = Tuple{GameState, Vector{Float32}, Float32}[]
@@ -142,15 +143,15 @@ function run_training_iteration(
     optimizer,
     model,
     replay_buffer::ReplayBuffer;
-    n_games::Int=5,
-    sims::Int=100,
-    batch_size::Int=64,
-    updates_per_iteration::Int=16,
-    replay_recent_fraction::Float64=0.5,
-    replay_recent_window::Int=4096,
-    temperature_moves::Int=20,
-    rng=Random.default_rng(),
-    max_turns::Int=1000,
+    n_games::Int,
+    sims::Int,
+    batch_size::Int,
+    updates_per_iteration::Int,
+    replay_recent_fraction::Float64,
+    replay_recent_window::Int,
+    temperature_moves::Int,
+    rng,
+    max_turns::Int,
 )
     recent_pct = Int(round(replay_recent_fraction * 100))
     history_pct = 100 - recent_pct
@@ -190,7 +191,7 @@ end
 
 Convenience wrapper for `collect_selfplay_data`.
 """
-function play_game(mcts, config=GameConfig(), sims=100, temperature_moves=20, rng=Random.default_rng(); max_turns::Int=1000)
+function play_game(mcts, config, sims, temperature_moves, rng; max_turns::Int)
     return collect_selfplay_data(mcts, config, sims, temperature_moves, rng; max_turns=max_turns)
 end
 

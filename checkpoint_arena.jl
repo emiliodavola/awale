@@ -12,13 +12,16 @@ config = TOML.parsefile(joinpath(ROOT_DIR, "config.toml"))
 training_cfg = config["training"]
 selection_cfg = get(config, "selection", Dict{String, Any}())
 mcts_cfg = config["mcts"]
+arena_cfg = get(config, "arena", Dict{String, Any}())
 
 CHECKPOINT_DIR = String(training_cfg["checkpoint_dir"])
 MODEL_CONFIG_PATH = abspath(ROOT_DIR, String(get(training_cfg, "model_config_path", joinpath("src", "Awale", "config.toml"))))
 MAX_TURNS = Int(training_cfg["max_turns"])
 C_PUCT = Float32(mcts_cfg["c_puct"])
+DIRICHLET_ALPHA = Float32(get(mcts_cfg, "dirichlet_alpha", 0.3))
+DIRICHLET_EPSILON = Float32(get(mcts_cfg, "dirichlet_epsilon", 0.25))
 DEFAULT_GAMES = Int(get(selection_cfg, "promotion_games", 200))
-DEFAULT_SIMS = [0, 50, 200]
+DEFAULT_SIMS = Int[get(arena_cfg, "sim_candidates", [0, 50, 200])...]
 DEFAULT_OPENING_PLIES = Int[get(selection_cfg, "opening_plies", [0, 2, 4, 6, 8, 10])...]
 OPENINGS_PER_PLY = Int(get(selection_cfg, "openings_per_ply", 6))
 OPENING_SEED = Int(get(selection_cfg, "opening_seed", 20260705))
@@ -107,7 +110,7 @@ function available_matchups(numeric_labels=numeric_checkpoint_labels())
     return matchups
 end
 
-LATEST_ANCHOR_COUNT = 3
+LATEST_ANCHOR_COUNT = Int(get(arena_cfg, "latest_anchor_count", 3))
 
 function latest_anchor_matchups(numeric_labels=numeric_checkpoint_labels(), anchor_count::Int=LATEST_ANCHOR_COUNT)
     length(numeric_labels) <= 1 && return Tuple{Int, Int}[]
@@ -235,8 +238,8 @@ function run_duel(label_a, label_b; sims::Int, games::Int, openings=generate_ope
         return nothing
     end
 
-    agent_a = ModelAgent(MCTSSearch(model_a, C_PUCT, Dict{UInt64, Tuple{Float32, Int64}}()), sims)
-    agent_b = ModelAgent(MCTSSearch(model_b, C_PUCT, Dict{UInt64, Tuple{Float32, Int64}}()), sims)
+    agent_a = ModelAgent(MCTSSearch(model_a, C_PUCT, DIRICHLET_ALPHA, DIRICHLET_EPSILON, Dict{UInt64, Tuple{Float64, Int64}}()), sims)
+    agent_b = ModelAgent(MCTSSearch(model_b, C_PUCT, DIRICHLET_ALPHA, DIRICHLET_EPSILON, Dict{UInt64, Tuple{Float64, Int64}}()), sims)
     duel_rng = Random.MersenneTwister(OPENING_SEED + 1000 * sims + 31 * stable_label_seed(label_a) + stable_label_seed(label_b))
     return evaluate_agents_on_openings(agent_a, agent_b, openings, games, duel_rng; max_turns=max_turns)
 end

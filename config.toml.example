@@ -39,3 +39,9 @@ anchor_min_decided_win_rate = 50.0
 
 [mcts]
 c_puct = 2.5
+dirichlet_alpha = 0.3
+dirichlet_epsilon = 0.25
+
+[arena]
+sim_candidates = [0, 50, 200]
+latest_anchor_count = 3
