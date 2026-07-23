@@ -1,5 +1,6 @@
 using Test
 using StaticArrays
+using Random
 using .Awale
 
 function terminal_state(board::NTuple{12,Int}; to_move::Int8=Int8(1), captured=(UInt8(0), UInt8(0)), config::Awale.GameConfig=Awale.GameConfig(), history_hash::UInt64=UInt64(0), history_hashes::Set{UInt64}=Set{UInt64}())
@@ -108,7 +109,8 @@ end
         outcome = Awale.Evaluation.play_match_from_state(
             Awale.initial_state(),
             Awale.Evaluation.RandomAgent(),
-            Awale.Evaluation.RandomAgent();
+            Awale.Evaluation.RandomAgent(),
+            Random.MersenneTwister(0);
             max_turns=0,
         )
 
@@ -122,7 +124,8 @@ end
         outcome = Awale.Evaluation.play_match_from_state(
             terminal,
             Awale.Evaluation.RandomAgent(),
-            Awale.Evaluation.RandomAgent();
+            Awale.Evaluation.RandomAgent(),
+            Random.MersenneTwister(0);
             max_turns=0,
         )
 

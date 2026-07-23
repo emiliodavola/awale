@@ -49,6 +49,8 @@ USE_RANDOM_ANCHOR = Bool(get(selection_cfg, "use_random_anchor", true))
 USE_HEURISTIC_ANCHOR = Bool(get(selection_cfg, "use_heuristic_anchor", false))
 ANCHOR_MIN_DECIDED_WIN_RATE = Float64(get(selection_cfg, "anchor_min_decided_win_rate", 50.0))
 C_PUCT = Float32(mcts_cfg["c_puct"])
+DIRICHLET_ALPHA = Float32(get(mcts_cfg, "dirichlet_alpha", 0.3))
+DIRICHLET_EPSILON = Float32(get(mcts_cfg, "dirichlet_epsilon", 0.25))
 const INITIAL_MODEL_SEED = Int(training_cfg["initial_model_seed"])
 const BOOTSTRAP_RNG_SEED = Int(training_cfg["bootstrap_rng_seed"])
 const MAX_TURNS = Int(training_cfg["max_turns"])
@@ -195,25 +197,25 @@ end
 
 function evaluate_best_promotion(candidate_model)
     selection_openings = build_selection_openings()
-    candidate_agent = ModelAgent(MCTSSearch(candidate_model, C_PUCT, Dict{UInt64, Tuple{Float32, Int64}}()), BEST_TARGET_SIMS)
+    candidate_agent = ModelAgent(MCTSSearch(candidate_model, C_PUCT, DIRICHLET_ALPHA, DIRICHLET_EPSILON, Dict{UInt64, Tuple{Float64, Int64}}()), BEST_TARGET_SIMS)
     current_best_results = nothing
     current_best_rate = nothing
     best_checkpoint_path = training_best_checkpoint_existing_path()
 
     if best_checkpoint_path !== nothing
         best_model = load_model(best_checkpoint_path)
-        best_agent = ModelAgent(MCTSSearch(best_model, C_PUCT, Dict{UInt64, Tuple{Float32, Int64}}()), BEST_TARGET_SIMS)
-        current_best_results = evaluate_agents_on_openings(candidate_agent, best_agent, selection_openings, BEST_PROMOTION_GAMES, selection_rng(1))
+        best_agent = ModelAgent(MCTSSearch(best_model, C_PUCT, DIRICHLET_ALPHA, DIRICHLET_EPSILON, Dict{UInt64, Tuple{Float64, Int64}}()), BEST_TARGET_SIMS)
+        current_best_results = evaluate_agents_on_openings(candidate_agent, best_agent, selection_openings, BEST_PROMOTION_GAMES, selection_rng(1); max_turns=MAX_TURNS)
         current_best_rate = decided_win_rate(current_best_results)
     end
 
     anchor_reports = NamedTuple[]
     if USE_RANDOM_ANCHOR
-        random_results = evaluate_agents_on_openings(candidate_agent, RandomAgent(), selection_openings, BEST_PROMOTION_GAMES, selection_rng(2))
+        random_results = evaluate_agents_on_openings(candidate_agent, RandomAgent(), selection_openings, BEST_PROMOTION_GAMES, selection_rng(2); max_turns=MAX_TURNS)
         push!(anchor_reports, (name="random", results=random_results, decided_win_rate=decided_win_rate(random_results)))
     end
     if USE_HEURISTIC_ANCHOR
-        heuristic_results = evaluate_agents_on_openings(candidate_agent, HeuristicAgent(), selection_openings, BEST_PROMOTION_GAMES, selection_rng(3))
+        heuristic_results = evaluate_agents_on_openings(candidate_agent, HeuristicAgent(), selection_openings, BEST_PROMOTION_GAMES, selection_rng(3); max_turns=MAX_TURNS)
         push!(anchor_reports, (name="heuristic", results=heuristic_results, decided_win_rate=decided_win_rate(heuristic_results)))
     end
 
@@ -408,8 +410,8 @@ function main(args::Vector{String}=Base.ARGS)
 
     optimizer = Flux.setup(Flux.Adam(LEARNING_RATE), model[])
     replay_buffer = ReplayBuffer(REPLAY_BUFFER_CAPACITY)
-    training_mcts = MCTSSearch(model[], C_PUCT, Dict{UInt64, Tuple{Float32, Int64}}())
-    evaluation_mcts = MCTSSearch(model[], C_PUCT, Dict{UInt64, Tuple{Float32, Int64}}())
+    training_mcts = MCTSSearch(model[], C_PUCT, DIRICHLET_ALPHA, DIRICHLET_EPSILON, Dict{UInt64, Tuple{Float64, Int64}}())
+    evaluation_mcts = MCTSSearch(model[], C_PUCT, DIRICHLET_ALPHA, DIRICHLET_EPSILON, Dict{UInt64, Tuple{Float64, Int64}}())
     agent_random = RandomAgent()
 
     if start_iter[] <= NUM_ITERATIONS
@@ -436,7 +438,7 @@ function main(args::Vector{String}=Base.ARGS)
             last_loss[] = Float64(loss)
 
             agent_model = ModelAgent(evaluation_mcts, SIMS_PER_EVAL)
-            results = evaluate_agents(agent_model, agent_random, EVAL_GAMES, Awale.GameConfig(), rng)
+            results = evaluate_agents(agent_model, agent_random, EVAL_GAMES, Awale.GameConfig(), rng; max_turns=MAX_TURNS)
             win_rate = (results.wins / EVAL_GAMES) * 100
             println("  Baseline vs Random @ $(SIMS_PER_EVAL) sims: $(round(win_rate, digits=2))% (W:$(results.wins) L:$(results.losses) D:$(results.draws))")
             last_baseline_win_rate[] = Float64(win_rate)
