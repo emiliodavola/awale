@@ -54,11 +54,22 @@ function count_definitions(text::String)::Int
     count = 0
     for line in eachsplit(text, '\n')
         stripped = strip(line)
-        # Count top-level definitions: function, struct, mutable struct, macro
+        isempty(stripped) && continue
+        # Skip non-top-level (indented) definitions — these are closures/lambdas
+        isspace(first(line)) && continue
+
+        # Multi-line definitions
         if startswith(stripped, "function ") ||
            startswith(stripped, "struct ") ||
            startswith(stripped, "mutable struct ") ||
            startswith(stripped, "macro ")
+            count += 1
+        end
+
+        # One-liner definitions: f(x) = ..., (::Type)(x) = ...
+        if occursin(r"^[a-zA-Z_][a-zA-Z0-9_!?]*\(.*\)\s*=", stripped) ||
+           occursin(r"^\(.*\)\(.*\)\s*=", stripped) ||
+           startswith(stripped, "Base.")
             count += 1
         end
     end

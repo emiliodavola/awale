@@ -24,6 +24,12 @@ const C_PUCT = Float32(mcts_cfg["c_puct"])
 CHECKPOINT_DIR = String(training_cfg["checkpoint_dir"])
 MODEL_CONFIG_PATH = abspath(ROOT_DIR, String(get(training_cfg, "model_config_path", joinpath("src", "Awale", "config.toml"))))
 
+"""
+    HumanAgent
+
+Agent that reads moves from standard input for interactive play.
+Prompts the user for a pit choice and validates against legal moves.
+"""
 struct HumanAgent end
 
 """
