@@ -471,7 +471,7 @@ end
         @test !train_module.should_save_snapshot(3, 25, 25)
         @test !train_module.should_save_snapshot(24, 25, 25)
         @test !train_module.should_save_snapshot(27, 27, 25)
-        @test train_module.UPDATES_PER_ITERATION == 16
+        @test train_module.UPDATES_PER_ITERATION == 24
         @test train_module.decided_win_rate((wins=6, losses=4, draws=0, avg_turns=0.0)) == 60.0
         @test train_module.decided_win_rate((wins=0, losses=0, draws=10, avg_turns=0.0)) == 50.0
         @test train_module.validate_training_config() === nothing
