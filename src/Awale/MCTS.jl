@@ -35,6 +35,12 @@ struct MCTSNode
     children::Dict{Int, MCTSNode}
 end
 
+"""
+    MCTSNode(s::GameState, prior::Float32=1.0f0) -> MCTSNode
+
+Convenience constructor that initializes an unvisited MCTS node (zero visits, zero value sum)
+with an empty children dictionary.
+"""
 function MCTSNode(s::GameState, prior::Float32=1.0f0)
     return MCTSNode(s, prior, Ref(0), Ref(0.0f0), Dict())
 end
@@ -183,6 +189,12 @@ function generate_dirichlet(rng, n, alpha)
     return samples ./ total
 end
 
+"""
+    sample_gamma(rng, alpha) -> Float32
+
+Sample from a Gamma(alpha, 1) distribution using the Marsaglia–Tsang algorithm.
+Used by `generate_dirichlet` to produce Dirichlet noise for MCTS root exploration.
+"""
 function sample_gamma(rng, alpha)
     if alpha < 1.0f0
         return sample_gamma(rng, alpha + 1.0f0) * (Float32(rand(rng))^(1.0f0 / alpha))
