@@ -13,12 +13,24 @@ using Random
 
 export RandomAgent, HeuristicAgent, ModelAgent, evaluate_agents, evaluate_agents_on_openings, generate_opening_suite, play_match
 
+"""
+    result_from_terminal_state(state::GameState) -> Int
+
+Convert a terminal `reward` value to a match result from player 1's perspective:
+1 (P1 wins), -1 (P2 wins), or 0 (draw).
+"""
 function result_from_terminal_state(state::GameState)::Int
     terminal_reward = reward(state)
     p1_perspective_reward = state.to_move == 1 ? terminal_reward : -terminal_reward
     return p1_perspective_reward > 0 ? 1 : p1_perspective_reward < 0 ? -1 : 0
 end
 
+"""
+    result_from_cutoff_state(state::GameState) -> Int
+
+Return a match result from captures when the game was cut off (max turns reached):
+1 if player 1 has more captures, -1 if player 2 has more, 0 for a draw.
+"""
 function result_from_cutoff_state(state::GameState)::Int
     if state.captured[1] > state.captured[2]
         return 1
@@ -45,6 +57,11 @@ struct MatchOutcome
     cutoff::Bool
 end
 
+"""
+    Base.iterate(outcome::MatchOutcome)
+
+Destructure a `MatchOutcome` into `(result, turns_played)` for convenient unpacking.
+"""
 Base.iterate(outcome::MatchOutcome) = (outcome.result, 1)
 Base.iterate(outcome::MatchOutcome, state::Int) = state == 1 ? (outcome.turns_played, 2) : nothing
 
@@ -55,6 +72,11 @@ Agent that selects uniformly among legal actions. Baseline for comparison.
 """
 struct RandomAgent end
 
+"""
+    select_action(::RandomAgent, s::GameState, rng=Random.default_rng()) -> Int
+
+Select a legal action uniformly at random. Baseline agent for comparison.
+"""
 function select_action(::RandomAgent, s::GameState, rng=Random.default_rng())
     actions = legal_actions(s)
     return actions[rand(rng, 1:length(actions))]
@@ -68,6 +90,11 @@ Simple heuristic baseline for comparison.
 """
 struct HeuristicAgent end
 
+"""
+    select_action(::HeuristicAgent, s::GameState, rng=Random.default_rng()) -> Int
+
+Select the legal action that maximises immediate captures (greedy heuristic).
+"""
 function select_action(::HeuristicAgent, s::GameState, rng=Random.default_rng())
     actions = legal_actions(s)
     isempty(actions) && return 0
@@ -102,6 +129,11 @@ struct ModelAgent
     sims::Int
 end
 
+"""
+    select_action(agent::ModelAgent, s::GameState, rng=Random.default_rng()) -> Int
+
+Select an action using MCTS search with the agent's neural model.
+"""
 function select_action(agent::ModelAgent, s::GameState, rng=Random.default_rng())
     return search(agent.mcts, s, agent.sims, rng; add_root_noise=false)
 end
