@@ -1,3 +1,9 @@
+"""
+    Env
+
+Awale game rules: legal actions, state transitions, terminal detection, and rewards.
+All transitions are pure functions — input states are never mutated.
+"""
 module Env
 
 using StaticArrays: SVector
@@ -47,6 +53,11 @@ function is_starved(s::GameState, p::Integer)::Bool
     return all(i -> s.board[i] == 0, start:(start+5))
 end
 
+"""
+    local_to_global(action::Int, s::GameState) -> Int
+
+Map a local action (1-6 for the current player) to a global board index (1-12).
+"""
 function local_to_global(action::Int, s::GameState)::Int
     return (s.to_move == 1) ? action : action + 6
 end
@@ -85,6 +96,13 @@ function simulate_move(s::GameState, action::Int)
     return SVector{12,UInt8}(board_vec), captured
 end
 
+"""
+    legal_actions(s::GameState) -> Vector{Int}
+
+Return all legal local actions (1-6) for the current player under `s.config`.
+Accounts for forced-feeding and starvation-prevention rules when they are active.
+Returns an empty vector if the player has no seeds.
+"""
 function legal_actions(s::GameState)::Vector{Int}
     slice = (s.to_move == 1) ? s.board[1:6] : s.board[7:12]
     base_actions = [i for i in 1:6 if slice[i] > 0]
@@ -123,6 +141,13 @@ function legal_actions(s::GameState)::Vector{Int}
 end
 
 
+"""
+    transition(s::GameState, action::Int) -> GameState
+
+Apply a legal local `action` to `state` and return the resulting `GameState`.
+Throws `ErrorException` if the action is not legal.
+Updates the history hash for repetition detection.
+"""
 function transition(s::GameState, action::Int)::GameState
     actions = legal_actions(s)
     if !(action in actions)
@@ -149,6 +174,14 @@ function transition(s::GameState, action::Int)::GameState
     return GameState(new_board, new_to_move, new_captured, h, s.config, new_history)
 end
 
+"""
+    is_terminal(s::GameState) -> Bool
+
+Check whether the game is over. Termination triggers:
+  1. A player captures 25+ seeds (or both reach 24).
+  2. Repetition is detected and the configured policy is not :revert.
+  3. The current player has no legal moves.
+"""
 function is_terminal(s::GameState)::Bool
     # 1. Capture threshold / draw.
     if Int(s.captured[1]) >= 25 || Int(s.captured[2]) >= 25
@@ -171,6 +204,13 @@ function is_terminal(s::GameState)::Bool
     return false
 end
 
+"""
+    reward(s::GameState) -> Float32
+
+Compute the game outcome from the perspective of the player whose turn it would be.
+Returns 1.0 for a win, -1.0 for a loss, 0.0 for a draw.
+Accounts for repetition policy and terminal score totals.
+"""
 function reward(s::GameState)::Float32
     if s.history_hash in s.history_hashes
         if s.config.repetition == :draw_on_repeat
