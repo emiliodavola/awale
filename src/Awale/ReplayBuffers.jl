@@ -47,6 +47,11 @@ function ReplayBuffer(capacity::Int)
     return ReplayBuffer(capacity, Experience[], 1)
 end
 
+"""
+    Base.length(rb::ReplayBuffer) -> Int
+
+Return the number of experiences currently stored in the buffer.
+"""
 Base.length(rb::ReplayBuffer) = length(rb.buffer)
 
 """
@@ -77,6 +82,12 @@ function chronological_indices(rb::ReplayBuffer)::Vector{Int}
     return vcat(collect(rb.cursor:length(rb)), collect(1:(rb.cursor - 1)))
 end
 
+"""
+    sample_without_replacement(pool::Vector{Int}, count::Int, rng) -> Vector{Int}
+
+Sample `count` indices from `pool` uniformly without replacement.
+Used by `sample_batch` to draw from recent and history pools independently.
+"""
 function sample_without_replacement(pool::Vector{Int}, count::Int, rng)
     count <= 0 && return Int[]
     actual_count = min(count, length(pool))

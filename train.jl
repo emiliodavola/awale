@@ -56,76 +56,166 @@ const BOOTSTRAP_RNG_SEED = Int(training_cfg["bootstrap_rng_seed"])
 const MAX_TURNS = Int(training_cfg["max_turns"])
 const TRAINING_STATE_RESUME_CONTRACT = "weights-only"
 
+"""
+    model_architecture_name() -> String
+
+Return the architecture name from the model configuration TOML.
+"""
 function model_architecture_name()
     return Awale.Model.model_architecture(TOML.parsefile(MODEL_CONFIG_PATH)["model"])
 end
 
+"""
+    checkpoint_namespace_dir() -> String
+
+Return the architecture-scoped checkpoint directory.
+"""
 function checkpoint_namespace_dir()
     return joinpath(CHECKPOINT_DIR, architecture_slug(model_architecture_name()))
 end
 
+"""
+    checkpoint_write_path(configured_path, default_filename) -> String
+
+Resolve a checkpoint write path under the architecture-scoped checkpoint directory.
+"""
 function checkpoint_write_path(configured_path::AbstractString, default_filename::AbstractString)
     return architecture_scoped_path(CHECKPOINT_DIR, model_architecture_name(), configured_path, default_filename)
 end
 
+"""
+    checkpoint_candidates(configured_path, default_filename) -> Vector{String}
+
+Return ordered candidate paths for checkpoint lookup (namespaced first, then legacy).
+"""
 function checkpoint_candidates(configured_path::AbstractString, default_filename::AbstractString)
     return architecture_scoped_candidates(CHECKPOINT_DIR, model_architecture_name(), configured_path, default_filename)
 end
 
+"""
+    checkpoint_existing_path(configured_path, default_filename) -> Union{String, Nothing}
+
+Return the path of an existing checkpoint file, or `nothing` if none exists.
+"""
 function checkpoint_existing_path(configured_path::AbstractString, default_filename::AbstractString)
     return first_existing_path(checkpoint_candidates(configured_path, default_filename))
 end
 
+"""
+    training_log_dir() -> String
+
+Return the log directory nested under the checkpoint namespace.
+"""
 function training_log_dir()
     return joinpath(checkpoint_namespace_dir(), "log")
 end
 
+"""
+    training_log_file_path() -> String
+
+Return a timestamped path for a training configuration log file.
+"""
 function training_log_file_path()
     timestamp = Dates.format(Dates.now(), "yyyy_mm_dd_HH_mm")
     architecture = architecture_slug(model_architecture_name())
     return joinpath(training_log_dir(), "training_config_$(architecture)_$timestamp.toml")
 end
 
+"""
+    current_commit_sha() -> String
+
+Return the current Git commit SHA of the repository.
+"""
 function current_commit_sha()
     return readchomp(`git -C $ROOT_DIR rev-parse HEAD`)
 end
 
+"""
+    training_snapshot_path(iter::Int) -> String
+
+Return the path for an iteration snapshot checkpoint.
+"""
 function training_snapshot_path(iter::Int)
     return joinpath(checkpoint_namespace_dir(), "model_iter_$(iter).bin")
 end
 
+"""
+    training_last_checkpoint_path() -> String
+
+Return the write path for the "last" checkpoint (latest trained model).
+"""
 function training_last_checkpoint_path()
     return checkpoint_write_path(String(get(training_cfg, "last_checkpoint_path", joinpath(CHECKPOINT_DIR, "model_last.bin"))), "model_last.bin")
 end
 
+"""
+    training_last_checkpoint_existing_path() -> Union{String, Nothing}
+
+Return the existing "last" checkpoint path, or `nothing`.
+"""
 function training_last_checkpoint_existing_path()
     return checkpoint_existing_path(String(get(training_cfg, "last_checkpoint_path", joinpath(CHECKPOINT_DIR, "model_last.bin"))), "model_last.bin")
 end
 
+"""
+    training_best_checkpoint_path() -> String
+
+Return the write path for the "best" checkpoint (promoted model).
+"""
 function training_best_checkpoint_path()
     return checkpoint_write_path(String(get(training_cfg, "best_checkpoint_path", joinpath(CHECKPOINT_DIR, "model_best.bin"))), "model_best.bin")
 end
 
+"""
+    training_best_checkpoint_existing_path() -> Union{String, Nothing}
+
+Return the existing "best" checkpoint path, or `nothing`.
+"""
 function training_best_checkpoint_existing_path()
     return checkpoint_existing_path(String(get(training_cfg, "best_checkpoint_path", joinpath(CHECKPOINT_DIR, "model_best.bin"))), "model_best.bin")
 end
 
+"""
+    training_state_file_path() -> String
+
+Return the write path for the training state TOML file.
+"""
 function training_state_file_path()
     return checkpoint_write_path(String(get(training_cfg, "state_path", joinpath(CHECKPOINT_DIR, "training_state.toml"))), "training_state.toml")
 end
 
+"""
+    training_state_existing_path() -> Union{String, Nothing}
+
+Return the existing training state path, or `nothing`.
+"""
 function training_state_existing_path()
     return checkpoint_existing_path(String(get(training_cfg, "state_path", joinpath(CHECKPOINT_DIR, "training_state.toml"))), "training_state.toml")
 end
 
+"""
+    evaluation_checkpoint_path() -> String
+
+Return the write path for the final evaluation checkpoint.
+"""
 function evaluation_checkpoint_path()
     return checkpoint_write_path(String(get(eval_cfg, "checkpoint_path", joinpath(CHECKPOINT_DIR, "model_final.bin"))), "model_final.bin")
 end
 
+"""
+    evaluation_checkpoint_existing_path() -> Union{String, Nothing}
+
+Return the existing evaluation checkpoint path, or `nothing`.
+"""
 function evaluation_checkpoint_existing_path()
     return checkpoint_existing_path(String(get(eval_cfg, "checkpoint_path", joinpath(CHECKPOINT_DIR, "model_final.bin"))), "model_final.bin")
 end
 
+"""
+    write_training_state(path, last_iter, best_selection_score)
+
+Atomically write training state metadata (last iteration, best score, resume contract) to a TOML file.
+"""
 function write_training_state(path::String, last_iter::Int, best_selection_score::Float64)
     atomic_write(path) do io
         println(io, "resume_contract = \"$(TRAINING_STATE_RESUME_CONTRACT)\"")
@@ -134,6 +224,12 @@ function write_training_state(path::String, last_iter::Int, best_selection_score
     end
 end
 
+"""
+    read_training_state(path::String) -> Tuple{Int, Float64, String}
+
+Read training state from a TOML file. Returns `(last_iter, best_selection_score, resume_contract)`.
+Returns defaults `(0, -1.0, "weights-only")` if the file does not exist.
+"""
 function read_training_state(path::String)
     if !isfile(path)
         return 0, -1.0, TRAINING_STATE_RESUME_CONTRACT
@@ -146,11 +242,22 @@ function read_training_state(path::String)
     return last_iter, best_selection_score, resume_contract
 end
 
+"""
+    decided_win_rate(results) -> Float64
+
+Compute the win rate as a percentage of decided games (wins / (wins + losses)).
+Returns 50% if no decided games exist.
+"""
 function decided_win_rate(results)::Float64
     decided = results.wins + results.losses
     return decided == 0 ? 50.0 : (results.wins / decided) * 100.0
 end
 
+"""
+    validate_training_config()
+
+Check training configuration invariants. Throws `ArgumentError` if any constraint is violated.
+"""
 function validate_training_config()
     UPDATES_PER_ITERATION > 0 || throw(ArgumentError("training.updates_per_iteration must be > 0"))
     0.0 <= REPLAY_RECENT_FRACTION <= 1.0 || throw(ArgumentError("training.replay_recent_fraction must be between 0 and 1"))
@@ -159,6 +266,12 @@ function validate_training_config()
     return nothing
 end
 
+"""
+    validate_selection_config(games, opening_plies, openings_per_ply)
+
+Check selection/promotion configuration invariants.
+Throws `ArgumentError` if any constraint is violated.
+"""
 function validate_selection_config(games::Int, opening_plies, openings_per_ply::Int)
     BEST_TARGET_SIMS >= 0 || throw(ArgumentError("selection.target_sims must be >= 0"))
     games > 0 || throw(ArgumentError("selection.promotion_games must be > 0"))
@@ -168,6 +281,11 @@ function validate_selection_config(games::Int, opening_plies, openings_per_ply::
     openings_per_ply > 0 || throw(ArgumentError("selection.openings_per_ply must be > 0"))
 end
 
+"""
+    build_selection_openings() -> Vector{GameState}
+
+Generate and return the opening positions used for model selection evaluation.
+"""
 function build_selection_openings()
     validate_selection_config(BEST_PROMOTION_GAMES, BEST_OPENING_PLIES, BEST_OPENINGS_PER_PLY)
     return generate_opening_suite(
@@ -177,14 +295,31 @@ function build_selection_openings()
     )
 end
 
+"""
+    selection_rng(offset::Int) -> MersenneTwister
+
+Create a seeded RNG for deterministic selection evaluation.
+"""
 selection_rng(offset::Int) = Random.MersenneTwister(BEST_SELECTION_SEED + offset)
 
+"""
+    create_initial_model() -> AwaleModel
+
+Create and seed the initial neural network model.
+"""
 function create_initial_model()
     println("Initializing base model with fixed seed: $INITIAL_MODEL_SEED")
     Random.seed!(INITIAL_MODEL_SEED)
     return Awale.create_model(MODEL_CONFIG_PATH)
 end
 
+"""
+    selection_gate_status(current_best_rate, anchor_reports) -> NamedTuple
+
+Evaluate whether a candidate model passes all promotion gates:
+best-model threshold and anchor-agent win-rate floors.
+Returns a NamedTuple with `promoted`, `passes_best`, `passes_anchors`, and `reasons`.
+"""
 function selection_gate_status(current_best_rate, anchor_reports)
     passes_best = current_best_rate === nothing || current_best_rate >= BEST_PROMOTION_THRESHOLD
     passes_anchors = all(report.decided_win_rate >= ANCHOR_MIN_DECIDED_WIN_RATE for report in anchor_reports)
@@ -195,6 +330,12 @@ function selection_gate_status(current_best_rate, anchor_reports)
     return (passes_best=passes_best, passes_anchors=passes_anchors, promoted=promoted, reasons=reasons)
 end
 
+"""
+    evaluate_best_promotion(candidate_model) -> NamedTuple
+
+Evaluate a candidate model against the current best and anchor agents (random, heuristic).
+Returns promotion status, rates, and per-agent reports.
+"""
 function evaluate_best_promotion(candidate_model)
     selection_openings = build_selection_openings()
     candidate_agent = ModelAgent(MCTSSearch(candidate_model, C_PUCT, DIRICHLET_ALPHA, DIRICHLET_EPSILON, Dict{UInt64, Tuple{Float64, Int64}}()), BEST_TARGET_SIMS)
@@ -233,6 +374,12 @@ function evaluate_best_promotion(candidate_model)
     )
 end
 
+"""
+    maybe_promote_best!(model, best_selection_score_ref, selection) -> Bool
+
+Promote the current model to "best" if the selection gate passed.
+Updates the best score reference and saves the checkpoint.
+"""
 function maybe_promote_best!(model, best_selection_score_ref, selection)
     if !selection.promoted
         return false
@@ -243,6 +390,12 @@ function maybe_promote_best!(model, best_selection_score_ref, selection)
     return true
 end
 
+"""
+    write_release_summary_file(release_summary_file; kwargs...) -> String
+
+Write a release summary TOML with run metadata and metrics.
+Convenience wrapper around `Awale.Publication.write_release_summary`.
+"""
 function write_release_summary_file(
     release_summary_file::AbstractString;
     commit_sha::AbstractString,
@@ -286,6 +439,13 @@ function write_release_summary_file(
     return release_summary_file
 end
 
+"""
+    snapshot_run_configs(log_dir, architecture, release_id) -> Tuple{String, String}
+
+Copy the current runtime configuration and model configuration TOML files
+into the log directory with an architecture- and release-specific filename.
+Returns `(runtime_config_path, model_config_path)`.
+"""
 function snapshot_run_configs(log_dir::String, architecture::AbstractString, release_id::AbstractString)
     arch = architecture_slug(architecture)
     runtime_config_path = runtime_config_snapshot_path(log_dir, arch, release_id)
@@ -303,6 +463,12 @@ function snapshot_run_configs(log_dir::String, architecture::AbstractString, rel
     return runtime_config_path, model_config_path
 end
 
+"""
+    maybe_resume_from_legacy_checkpoint!(model_ref, start_iter_ref)
+
+Scan for legacy iteration checkpoints (model_iter_N.bin) and resume training
+from the latest found iteration. Mutates `model_ref` and `start_iter_ref` in-place.
+"""
 function maybe_resume_from_legacy_checkpoint!(model_ref, start_iter_ref)
     found_iters = Int[]
 
@@ -335,14 +501,32 @@ function maybe_resume_from_legacy_checkpoint!(model_ref, start_iter_ref)
     end
 end
 
+"""
+    is_power_of_two(value::Int) -> Bool
+
+Check whether `value` is a power of two (used for snapshot scheduling).
+"""
 is_power_of_two(value::Int) = value > 0 && (value & (value - 1)) == 0
 
+"""
+    should_save_snapshot(iter, num_iterations, checkpoint_every) -> Bool
+
+Determine whether an iteration checkpoint snapshot should be saved:
+on iteration 1, on power-of-two iterations, and on intervals of `checkpoint_every`.
+"""
 function should_save_snapshot(iter::Int, num_iterations::Int, checkpoint_every::Int)
     return iter == 1 ||
         is_power_of_two(iter) ||
         (checkpoint_every > 0 && iter % checkpoint_every == 0)
 end
 
+"""
+    main(args::Vector{String}=Base.ARGS)
+
+Entry point for the training pipeline. Parses CLI args (e.g. `--reset`),
+loads or creates a model, runs training iterations with evaluation,
+promotion, and snapshotting, and writes a release summary on completion.
+"""
 function main(args::Vector{String}=Base.ARGS)
     println("--- Starting Awale Training and Evaluation ---")
 

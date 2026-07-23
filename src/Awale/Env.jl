@@ -12,11 +12,26 @@ using ..Utils: fnv1a64
 
 export legal_actions, transition, is_terminal, reward, local_to_global
 
+"""
+    opponent_player(p::Int8) -> Int8
+
+Return the opponent of player `p` (1 → 2, 2 → 1).
+"""
 opponent_player(p::Int8) = p == Int8(1) ? Int8(2) : Int8(1)
 
+"""
+    same_side(i::Int, player::Int) -> Bool
+
+Check whether board index `i` belongs to `player`'s side (pits 1–6 for player 1, 7–12 for player 2).
+"""
 same_side(i::Int, player::Int)::Bool =
     (player == 1 && 1 <= i <= 6) || (player == 2 && 7 <= i <= 12)
 
+"""
+    side_seed_totals(s::GameState) -> Tuple{Int, Int}
+
+Return the total seeds (board + captured) for each player.
+"""
 function side_seed_totals(s::GameState)::Tuple{Int,Int}
     p1_total = Int(s.captured[1])
     p2_total = Int(s.captured[2])
@@ -31,6 +46,12 @@ function side_seed_totals(s::GameState)::Tuple{Int,Int}
     return p1_total, p2_total
 end
 
+"""
+    terminal_score_totals(s::GameState) -> Tuple{Int, Int}
+
+Return the scores to use at a terminal state. If no legal moves remain, returns
+total seeds (board + captured) for each player; otherwise returns captures only.
+"""
 function terminal_score_totals(s::GameState)::Tuple{Int,Int}
     if isempty(legal_actions(s))
         return side_seed_totals(s)
@@ -38,6 +59,12 @@ function terminal_score_totals(s::GameState)::Tuple{Int,Int}
     return Int(s.captured[1]), Int(s.captured[2])
 end
 
+"""
+    score_to_perspective_reward(s::GameState, p1_score::Int, p2_score::Int) -> Float32
+
+Convert absolute scores to a reward from the perspective of `s.to_move`:
+  1.0 if to_move's player is winning, -1.0 if losing, 0.0 for a draw.
+"""
 function score_to_perspective_reward(s::GameState, p1_score::Int, p2_score::Int)::Float32
     if p1_score > p2_score
         return (s.to_move == 1) ? 1.0f0 : -1.0f0
@@ -48,6 +75,11 @@ function score_to_perspective_reward(s::GameState, p1_score::Int, p2_score::Int)
     end
 end
 
+"""
+    is_starved(s::GameState, p::Integer) -> Bool
+
+Check whether player `p` has no seeds on their side (all pits empty).
+"""
 function is_starved(s::GameState, p::Integer)::Bool
     start = (p == 1) ? 1 : 7
     return all(i -> s.board[i] == 0, start:(start+5))
@@ -63,7 +95,13 @@ function local_to_global(action::Int, s::GameState)::Int
 end
 
 
-# Helper to simulate a move without creating a full GameState object
+"""
+    simulate_move(s::GameState, action::Int) -> Tuple{SVector{12,UInt8}, Int}
+
+Simulate a move on `s` using a local mutable board and return the resulting board
+vector and number of seeds captured. Does **not** create a full `GameState` — used
+by `legal_actions` and `transition` for efficient what-if evaluation.
+"""
 function simulate_move(s::GameState, action::Int)
     idx = local_to_global(action, s)
     seeds = s.board[idx]
