@@ -12,39 +12,74 @@ config = TOML.parsefile(joinpath(ROOT_DIR, "config.toml"))
 training_cfg = config["training"]
 selection_cfg = get(config, "selection", Dict{String, Any}())
 mcts_cfg = config["mcts"]
+arena_cfg = get(config, "arena", Dict{String, Any}())
 
 CHECKPOINT_DIR = String(training_cfg["checkpoint_dir"])
 MODEL_CONFIG_PATH = abspath(ROOT_DIR, String(get(training_cfg, "model_config_path", joinpath("src", "Awale", "config.toml"))))
 MAX_TURNS = Int(training_cfg["max_turns"])
 C_PUCT = Float32(mcts_cfg["c_puct"])
+DIRICHLET_ALPHA = Float32(get(mcts_cfg, "dirichlet_alpha", 0.3))
+DIRICHLET_EPSILON = Float32(get(mcts_cfg, "dirichlet_epsilon", 0.25))
 DEFAULT_GAMES = Int(get(selection_cfg, "promotion_games", 200))
-DEFAULT_SIMS = [0, 50, 200]
+DEFAULT_SIMS = Int[get(arena_cfg, "sim_candidates", [0, 50, 200])...]
 DEFAULT_OPENING_PLIES = Int[get(selection_cfg, "opening_plies", [0, 2, 4, 6, 8, 10])...]
 OPENINGS_PER_PLY = Int(get(selection_cfg, "openings_per_ply", 6))
 OPENING_SEED = Int(get(selection_cfg, "opening_seed", 20260705))
 
+"""
+    model_architecture_name() -> String
+
+Return the architecture name from the model configuration TOML.
+"""
 function model_architecture_name()
     return Awale.Model.model_architecture(TOML.parsefile(MODEL_CONFIG_PATH)["model"])
 end
 
+"""
+    checkpoint_architecture(architecture=nothing) -> String
+
+Return the checkpoint architecture name, defaulting to the configured model architecture.
+"""
 function checkpoint_architecture(architecture=nothing)
     return architecture === nothing ? model_architecture_name() : String(architecture)
 end
 
+"""
+    checkpoint_namespace_dir(architecture=nothing) -> String
+
+Return the architecture-scoped checkpoint directory.
+"""
 function checkpoint_namespace_dir(architecture=nothing)
     return joinpath(CHECKPOINT_DIR, architecture_slug(checkpoint_architecture(architecture)))
 end
 
+"""
+    checkpoint_path_candidates(configured_path, default_filename; architecture=nothing) -> Vector{String}
+
+Return candidate checkpoint paths for a given configuration entry and architecture.
+"""
 function checkpoint_path_candidates(configured_path::AbstractString, default_filename::AbstractString; architecture=nothing)
     return architecture_scoped_candidates(CHECKPOINT_DIR, checkpoint_architecture(architecture), configured_path, default_filename)
 end
 
+"""
+    checkpoint_path_from_config(configured_path, default_filename; architecture=nothing) -> String
+
+Return the first existing checkpoint path for a configuration entry, falling back
+to the first candidate if none exists.
+"""
 function checkpoint_path_from_config(configured_path::AbstractString, default_filename::AbstractString; architecture=nothing)
     candidates = checkpoint_path_candidates(configured_path, default_filename; architecture=architecture)
     found = first_existing_path(candidates)
     return found === nothing ? first(candidates) : found
 end
 
+"""
+    checkpoint_path(label; architecture=nothing) -> String
+
+Resolve a checkpoint label (integer iteration, "last", "best", "final", or path)
+to an absolute file path, optionally scoped by architecture.
+"""
 function checkpoint_path(label; architecture=nothing)
     arch = checkpoint_architecture(architecture)
     if label isa Int
@@ -62,10 +97,21 @@ function checkpoint_path(label; architecture=nothing)
     return get(mapping, String(label), joinpath(checkpoint_namespace_dir(arch), String(label)))
 end
 
+"""
+    checkpoint_label(label) -> String
+
+Format a checkpoint label for display: `iter_N` for integers, or the label as-is for strings.
+"""
 function checkpoint_label(label)
     return label isa Int ? "iter_$(label)" : String(label)
 end
 
+"""
+    existing_checkpoint_labels() -> Vector{Any}
+
+Discover all available checkpoint labels (integer iterations + "last", "best", "final")
+by scanning the checkpoint directories.
+"""
 function existing_checkpoint_labels()
     labels = Any[]
     seen_iters = Set{Int}()
@@ -93,10 +139,20 @@ function existing_checkpoint_labels()
     return labels
 end
 
+"""
+    numeric_checkpoint_labels(labels=existing_checkpoint_labels()) -> Vector{Int}
+
+Return only the integer (iteration) labels, sorted ascending.
+"""
 function numeric_checkpoint_labels(labels=existing_checkpoint_labels())
     return sort([label for label in labels if label isa Int])
 end
 
+"""
+    available_matchups(numeric_labels=numeric_checkpoint_labels()) -> Vector{Tuple{Int, Int}}
+
+Return consecutive pairwise matchups from the sorted list of numeric labels.
+"""
 function available_matchups(numeric_labels=numeric_checkpoint_labels())
     matchups = Tuple{Int, Int}[]
 
@@ -107,8 +163,13 @@ function available_matchups(numeric_labels=numeric_checkpoint_labels())
     return matchups
 end
 
-LATEST_ANCHOR_COUNT = 3
+LATEST_ANCHOR_COUNT = Int(get(arena_cfg, "latest_anchor_count", 3))
 
+"""
+    latest_anchor_matchups(numeric_labels=numeric_checkpoint_labels(), anchor_count=LATEST_ANCHOR_COUNT) -> Vector{Tuple{Int, Int}}
+
+Return matchups between the latest `anchor_count` checkpoints and the very latest checkpoint.
+"""
 function latest_anchor_matchups(numeric_labels=numeric_checkpoint_labels(), anchor_count::Int=LATEST_ANCHOR_COUNT)
     length(numeric_labels) <= 1 && return Tuple{Int, Int}[]
 
@@ -118,6 +179,12 @@ function latest_anchor_matchups(numeric_labels=numeric_checkpoint_labels(), anch
     return [(latest, anchor) for anchor in reverse(anchors)]
 end
 
+"""
+    operational_alias_matchups(labels=existing_checkpoint_labels(), numeric_labels=numeric_checkpoint_labels(labels)) -> Vector{Tuple{Any, Any}}
+
+Return matchups between operational aliases ("best", "last", "final") and the latest iteration,
+as well as cross-alias matchups. Deduplicates results.
+"""
 function operational_alias_matchups(labels=existing_checkpoint_labels(), numeric_labels=numeric_checkpoint_labels(labels))
     isempty(numeric_labels) && return Tuple{Any, Any}[]
 
@@ -147,8 +214,18 @@ function operational_alias_matchups(labels=existing_checkpoint_labels(), numeric
     return unique(matchups)
 end
 
+"""
+    winner_label(label_a, label_b, results) -> String
+
+Return the label of the winning checkpoint, or "tie".
+"""
 winner_label(label_a, label_b, results) = ifelse(results.wins > results.losses, checkpoint_label(label_a), ifelse(results.losses > results.wins, checkpoint_label(label_b), "tie"))
 
+"""
+    winner_percentage(results) -> Float64
+
+Return the percentage of decided games won by the leader.
+"""
 function winner_percentage(results)
     decided = results.wins + results.losses
     decided == 0 && return 0.0
@@ -157,8 +234,18 @@ end
 
 const TABLE_WIDTHS = (checkpoint = 14, wins = 5, losses = 5, draws = 5, avg_turns = 9, who_wins = 32)
 
+"""
+    pad_cell(value, width) -> String
+
+Right-pad a value to the given width for table alignment.
+"""
 pad_cell(value, width::Int) = rpad(string(value), width)
 
+"""
+    format_header() -> String
+
+Return the arena results table header row.
+"""
 function format_header()
     return join([
         pad_cell("Checkpoint A", TABLE_WIDTHS.checkpoint),
@@ -171,6 +258,11 @@ function format_header()
     ], " | ")
 end
 
+"""
+    format_duel_result(label_a, label_b, results) -> String
+
+Format a single arena duel result as a table row.
+"""
 function format_duel_result(label_a, label_b, results)
     winner = winner_label(label_a, label_b, results)
     winner_text = winner == "tie" ? "tie" : "$(winner) ($(round(winner_percentage(results), digits=1))% of decided games)"
@@ -185,8 +277,18 @@ function format_duel_result(label_a, label_b, results)
     ], " | ")
 end
 
+"""
+    stable_label_seed(label) -> Int
+
+Derive a deterministic integer seed from a checkpoint label for reproducible duels.
+"""
 stable_label_seed(label) = label isa Int ? label : sum(codeunits(String(label)))
 
+"""
+    collect_duel_labels(matchups) -> Vector{Any}
+
+Collect all unique labels appearing in a list of matchups.
+"""
 function collect_duel_labels(matchups)::Vector{Any}
     labels = Any[]
     for (label_a, label_b) in matchups
@@ -195,10 +297,20 @@ function collect_duel_labels(matchups)::Vector{Any}
     return unique(labels)
 end
 
+"""
+    cache_key(label; architecture=nothing)
+
+Return a compound cache key that includes architecture scoping when an architecture is provided.
+"""
 function cache_key(label; architecture=nothing)
     return architecture === nothing ? label : (architecture_slug(String(architecture)), label)
 end
 
+"""
+    build_model_cache(labels; architecture=nothing) -> Dict
+
+Pre-load models for the given labels into an in-memory cache to avoid redundant disk I/O during duels.
+"""
 function build_model_cache(labels; architecture=nothing)
     cache = Dict{Any, Any}()
     for label in labels
@@ -212,6 +324,11 @@ function build_model_cache(labels; architecture=nothing)
     return cache
 end
 
+"""
+    resolve_model(label, path, model_cache; architecture=nothing) -> Union{Model, Nothing}
+
+Look up or load a model from cache or disk. Returns `nothing` if the checkpoint does not exist.
+"""
 function resolve_model(label, path::AbstractString, model_cache; architecture=nothing)
     if model_cache !== nothing
         if architecture !== nothing
@@ -225,6 +342,12 @@ function resolve_model(label, path::AbstractString, model_cache; architecture=no
     return isfile(path) ? load_model(path) : nothing
 end
 
+"""
+    run_duel(label_a, label_b; sims, games, openings, model_cache, max_turns, architecture_a, architecture_b) -> Union{NamedTuple, Nothing}
+
+Run a head-to-head duel between two model checkpoints using MCTS search agents.
+Returns evaluation results or `nothing` if a model cannot be loaded.
+"""
 function run_duel(label_a, label_b; sims::Int, games::Int, openings=generate_opening_suite(plies=DEFAULT_OPENING_PLIES, openings_per_ply=OPENINGS_PER_PLY, seed=OPENING_SEED), model_cache=nothing, max_turns::Int=MAX_TURNS, architecture_a=nothing, architecture_b=nothing)
     path_a = checkpoint_path(label_a; architecture=architecture_a)
     path_b = checkpoint_path(label_b; architecture=architecture_b)
@@ -235,12 +358,20 @@ function run_duel(label_a, label_b; sims::Int, games::Int, openings=generate_ope
         return nothing
     end
 
-    agent_a = ModelAgent(MCTSSearch(model_a, C_PUCT, Dict{UInt64, Tuple{Float32, Int64}}()), sims)
-    agent_b = ModelAgent(MCTSSearch(model_b, C_PUCT, Dict{UInt64, Tuple{Float32, Int64}}()), sims)
+    agent_a = ModelAgent(MCTSSearch(model_a, C_PUCT, DIRICHLET_ALPHA, DIRICHLET_EPSILON, Dict{UInt64, Tuple{Float64, Int64}}()), sims)
+    agent_b = ModelAgent(MCTSSearch(model_b, C_PUCT, DIRICHLET_ALPHA, DIRICHLET_EPSILON, Dict{UInt64, Tuple{Float64, Int64}}()), sims)
     duel_rng = Random.MersenneTwister(OPENING_SEED + 1000 * sims + 31 * stable_label_seed(label_a) + stable_label_seed(label_b))
     return evaluate_agents_on_openings(agent_a, agent_b, openings, games, duel_rng; max_turns=max_turns)
 end
 
+"""
+    main(; post_freeze_callback=nothing)
+
+Entry point for the checkpoint arena. Detects available checkpoints,
+constructs matchups (consecutive, anchor, and alias), runs duels,
+and prints results. Optionally accepts a callback to post-process
+the frozen arena state.
+"""
 function main(; post_freeze_callback=nothing)
     println("--- Awale checkpoint arena ---")
     detected_labels = existing_checkpoint_labels()

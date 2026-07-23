@@ -308,7 +308,7 @@ end
     @testset "search clears stale transposition state and supports deterministic eval mode" begin
         s = Awale.initial_state()
         rng = MersenneTwister(7)
-        mcts = Awale.MCTSSearch(DummyModel(), 1.5f0, Dict{UInt64, Tuple{Float32, Int64}}(0xdeadbeef => (99.0f0, 99)))
+        mcts = Awale.MCTSSearch(DummyModel(), 1.5f0, 0.3f0, 0.25f0, Dict{UInt64, Tuple{Float64, Int64}}(0xdeadbeef => (99.0f0, 99)))
 
         action_a, counts_a = Awale.search_with_stats(mcts, s, 8, rng; add_root_noise=false)
 
@@ -325,13 +325,13 @@ end
         s = Awale.initial_state()
         rng = MersenneTwister(3)
 
-        action_1_zero, policy_1_zero = Awale.search_with_stats(Awale.MCTSSearch(Prior1Model(), 1.5f0, Dict{UInt64, Tuple{Float32, Int64}}()), s, 0, rng; add_root_noise=false)
+        action_1_zero, policy_1_zero = Awale.search_with_stats(Awale.MCTSSearch(Prior1Model(), 1.5f0, 0.3f0, 0.25f0, Dict{UInt64, Tuple{Float64, Int64}}()), s, 0, rng; add_root_noise=false)
         rng = MersenneTwister(3)
-        action_6_zero, policy_6_zero = Awale.search_with_stats(Awale.MCTSSearch(Prior6Model(), 1.5f0, Dict{UInt64, Tuple{Float32, Int64}}()), s, 0, rng; add_root_noise=false)
+        action_6_zero, policy_6_zero = Awale.search_with_stats(Awale.MCTSSearch(Prior6Model(), 1.5f0, 0.3f0, 0.25f0, Dict{UInt64, Tuple{Float64, Int64}}()), s, 0, rng; add_root_noise=false)
         rng = MersenneTwister(3)
-        action_1, counts_1 = Awale.search_with_stats(Awale.MCTSSearch(Prior1Model(), 1.5f0, Dict{UInt64, Tuple{Float32, Int64}}()), s, 1, rng; add_root_noise=false)
+        action_1, counts_1 = Awale.search_with_stats(Awale.MCTSSearch(Prior1Model(), 1.5f0, 0.3f0, 0.25f0, Dict{UInt64, Tuple{Float64, Int64}}()), s, 1, rng; add_root_noise=false)
         rng = MersenneTwister(3)
-        action_6, counts_6 = Awale.search_with_stats(Awale.MCTSSearch(Prior6Model(), 1.5f0, Dict{UInt64, Tuple{Float32, Int64}}()), s, 1, rng; add_root_noise=false)
+        action_6, counts_6 = Awale.search_with_stats(Awale.MCTSSearch(Prior6Model(), 1.5f0, 0.3f0, 0.25f0, Dict{UInt64, Tuple{Float64, Int64}}()), s, 1, rng; add_root_noise=false)
 
         @test action_1_zero == 1
         @test policy_1_zero[1] > 0.99f0
@@ -366,7 +366,7 @@ end
         root.children[1] = child_bad_for_parent
         root.children[2] = child_good_for_parent
 
-        mcts = Awale.MCTSSearch(DummyModel(), 1.5f0, Dict{UInt64, Tuple{Float32, Int64}}())
+        mcts = Awale.MCTSSearch(DummyModel(), 1.5f0, 0.3f0, 0.25f0, Dict{UInt64, Tuple{Float64, Int64}}())
         @test Awale.MCTS.select_puct(mcts, root) == 2
     end
 
@@ -392,7 +392,7 @@ end
         model = Awale.create_model()
         optimizer = Flux.setup(Flux.Adam(1.0f-3), model)
         replay_buffer = Awale.ReplayBuffers.ReplayBuffer(256)
-        mcts = Awale.MCTSSearch(model, 1.5f0, Dict{UInt64, Tuple{Float32, Int64}}())
+        mcts = Awale.MCTSSearch(model, 1.5f0, 0.3f0, 0.25f0, Dict{UInt64, Tuple{Float64, Int64}}())
 
         loss = Awale.run_training_iteration(
             mcts,
@@ -407,6 +407,7 @@ end
             replay_recent_window=32,
             temperature_moves=2,
             rng=rng,
+            max_turns=1000,
         )
 
         @test isfinite(loss)
@@ -425,6 +426,7 @@ end
             replay_recent_window=0,
             temperature_moves=2,
             rng=MersenneTwister(11),
+            max_turns=1000,
         )
     end
 
@@ -469,7 +471,7 @@ end
         @test !train_module.should_save_snapshot(3, 25, 25)
         @test !train_module.should_save_snapshot(24, 25, 25)
         @test !train_module.should_save_snapshot(27, 27, 25)
-        @test train_module.UPDATES_PER_ITERATION == 16
+        @test train_module.UPDATES_PER_ITERATION == 24
         @test train_module.decided_win_rate((wins=6, losses=4, draws=0, avg_turns=0.0)) == 60.0
         @test train_module.decided_win_rate((wins=0, losses=0, draws=10, avg_turns=0.0)) == 50.0
         @test train_module.validate_training_config() === nothing

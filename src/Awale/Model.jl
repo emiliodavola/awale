@@ -1,3 +1,9 @@
+"""
+    Model
+
+Neural network model definition, inference, checkpoint persistence, and
+public model export for Hugging Face releases.
+"""
 module Model
 
 using TOML
@@ -7,6 +13,12 @@ using ..State: GameState, canonicalize, encode_state
 
 export create_model, predict, predict_batch, predict_inference, predict_batch_inference, predict_raw, encode_state, save_model, load_model, save_public_model, load_public_model
 
+"""
+    AwaleModel
+
+Dual-head neural network with shared trunk, policy head (logits), and value head (scalar).
+Uses `Flux.@layer` for automatic parameter tracking.
+"""
 mutable struct AwaleModel
     shared::Chain
     policy::Chain
@@ -16,22 +28,59 @@ end
 # Use @layer for Flux >= 0.15 to avoid deprecation warnings and ensure parameter tracking
 Flux.@layer AwaleModel
 
+"""
+    ReshapeLayer
+
+Flux-compatible layer that reshapes input to a fixed target shape.
+"""
 struct ReshapeLayer
     shape::Vector{Int}
 end
 
+"""
+    (layer::ReshapeLayer)(x)
+
+Reshape input `x` to the layer's target shape, preserving the batch dimension.
+"""
 (layer::ReshapeLayer)(x) = reshape(x, Tuple(layer.shape)..., size(x, ndims(x)))
 
+"""
+    FlattenLayer
+
+Flux-compatible layer that flattens spatial dimensions into a single feature vector,
+preserving the batch dimension.
+"""
 struct FlattenLayer end
+
+"""
+    (layer::FlattenLayer)(x)
+
+Flatten all spatial dimensions of `x`, preserving the batch (last) dimension.
+"""
 (layer::FlattenLayer)(x) = reshape(x, :, size(x, ndims(x)))
 
+"""
+    GlobalAveragePoolLayer
+
+Flux-compatible layer that spatially pools by averaging over all non-batch dimensions.
+"""
 struct GlobalAveragePoolLayer end
 
+"""
+    global_average_pool_dims(x) -> Tuple
+
+Return the dimensions over which to pool: all dimensions except the feature and batch dims.
+"""
 function global_average_pool_dims(x)
     ndims(x) <= 2 && return (1,)
     return ntuple(identity, ndims(x) - 2)
 end
 
+"""
+    global_average_pool(x)
+
+Pool `x` by taking the mean over all spatial dimensions.
+"""
 function global_average_pool(x)
     dims = global_average_pool_dims(x)
     denom = one(eltype(x))
@@ -41,13 +90,28 @@ function global_average_pool(x)
     return sum(x; dims=dims) ./ denom
 end
 
+"""
+    (layer::GlobalAveragePoolLayer)(x)
+
+Apply global average pooling to `x`.
+"""
 (layer::GlobalAveragePoolLayer)(x) = global_average_pool(x)
 
+"""
+    model_architecture(model_cfg) -> String
+
+Extract the architecture name from a parsed TOML model configuration.
+"""
 function model_architecture(model_cfg)::String
     architecture = get(model_cfg, "architecture", "mlp")
     return lowercase(String(architecture))
 end
 
+"""
+    activation_map() -> Dict{String, Function}
+
+Return a dictionary mapping activation function names to their Flux implementations.
+"""
 function activation_map()
     return Dict(
         "identity" => identity,
@@ -57,6 +121,12 @@ function activation_map()
     )
 end
 
+"""
+    parse_activation(spec::AbstractDict, act_map) -> Function
+
+Extract and look up the activation function from a TOML layer spec.
+Throws `ArgumentError` if the activation name is not in `act_map`.
+"""
 function parse_activation(spec, act_map)
     activation_name = lowercase(String(get(spec, "activation", "identity")))
     activation = get(act_map, activation_name, nothing)
@@ -64,10 +134,21 @@ function parse_activation(spec, act_map)
     return activation
 end
 
+"""
+    normalize_type_name(type_name) -> String
+
+Normalize a layer type name for case-insensitive matching: lowercases and removes underscores/dashes.
+"""
 function normalize_type_name(type_name)
     return replace(lowercase(String(type_name)), "_" => "", "-" => "")
 end
 
+"""
+    as_int_tuple(value, field_name) -> Tuple{Int, Vararg{Int}}
+
+Convert a TOML configuration value (integer or array) to a tuple of `Int`s.
+Throws `ArgumentError` if the value is neither an integer nor an array/tuple.
+"""
 function as_int_tuple(value, field_name::AbstractString)
     if value isa Integer
         return (Int(value),)
@@ -79,6 +160,12 @@ function as_int_tuple(value, field_name::AbstractString)
     return values
 end
 
+"""
+    as_repeated_int_tuple(value, dims, field_name) -> NTuple
+
+Convert a value to an `N`-tuple of `Int`s: if scalar, repeat it `dims` times;
+if already a tuple, validate its length matches `dims`.
+"""
 function as_repeated_int_tuple(value, dims::Int, field_name::AbstractString)
     if value isa Integer
         return ntuple(_ -> Int(value), dims)
@@ -89,12 +176,24 @@ function as_repeated_int_tuple(value, dims::Int, field_name::AbstractString)
     return values
 end
 
+"""
+    dense_layer(spec, act_map) -> Dense
+
+Build a `Dense` layer from a TOML specification dictionary.
+Requires `in` and `out` fields; optional `activation` (defaults to `identity`).
+"""
 function dense_layer(spec, act_map)
     haskey(spec, "in") || throw(ArgumentError("Dense layer is missing the 'in' field."))
     haskey(spec, "out") || throw(ArgumentError("Dense layer is missing the 'out' field."))
     return Dense(Int(spec["in"]) => Int(spec["out"]), parse_activation(spec, act_map))
 end
 
+"""
+    conv_layer(spec::AbstractDict, act_map) -> Conv
+
+Build a `Conv` layer from a TOML specification dictionary.
+Requires `in`, `out`, and `kernel` fields. Supports optional `stride`, `pad`, `dilation`, and `groups`.
+"""
 function conv_layer(spec::AbstractDict, act_map)
     kernel = get(spec, "kernel", get(spec, "size", nothing))
     kernel === nothing && throw(ArgumentError("Conv layer is missing the 'kernel' field."))
@@ -109,14 +208,31 @@ function conv_layer(spec::AbstractDict, act_map)
     return Conv(kernel_tuple, Int(spec["in"]) => Int(spec["out"]), activation; stride=stride, pad=pad, dilation=dilation, groups=groups)
 end
 
+"""
+    reshape_layer(spec::AbstractDict) -> ReshapeLayer
+
+Build a `ReshapeLayer` from a TOML specification.
+Requires `shape` (or `dims`) field.
+"""
 function reshape_layer(spec::AbstractDict)
     shape = get(spec, "shape", get(spec, "dims", nothing))
     shape === nothing && throw(ArgumentError("Reshape layer is missing the 'shape' field."))
     return ReshapeLayer(collect(as_int_tuple(shape, "shape")))
 end
 
+"""
+    flatten_layer(::AbstractDict) -> FlattenLayer
+
+Build a `FlattenLayer`. Ignores the spec body — flattening has no parameters.
+"""
 flatten_layer(::AbstractDict) = FlattenLayer()
 
+"""
+    maxpool_layer(spec::AbstractDict) -> MaxPool
+
+Build a `MaxPool` layer from a TOML specification.
+Requires `size` (or `kernel`) field. Supports optional `stride` and `pad`.
+"""
 function maxpool_layer(spec::AbstractDict)
     size = get(spec, "size", get(spec, "kernel", nothing))
     size === nothing && throw(ArgumentError("MaxPool layer is missing the 'size' field."))
@@ -126,6 +242,12 @@ function maxpool_layer(spec::AbstractDict)
     return MaxPool(size_tuple; stride=stride, pad=pad)
 end
 
+"""
+    meanpool_layer(spec::AbstractDict) -> MeanPool
+
+Build a `MeanPool` layer from a TOML specification.
+Requires `size` (or `kernel`) field. Supports optional `stride` and `pad`.
+"""
 function meanpool_layer(spec::AbstractDict)
     size = get(spec, "size", get(spec, "kernel", nothing))
     size === nothing && throw(ArgumentError("MeanPool layer is missing the 'size' field."))
@@ -135,10 +257,21 @@ function meanpool_layer(spec::AbstractDict)
     return MeanPool(size_tuple; stride=stride, pad=pad)
 end
 
+"""
+    global_average_pool_layer(::AbstractDict) -> GlobalAveragePoolLayer
+
+Build a `GlobalAveragePoolLayer`. Ignores the spec body — pooling over all spatial dims.
+"""
 function global_average_pool_layer(::AbstractDict)
     return GlobalAveragePoolLayer()
 end
 
+"""
+    batchnorm_layer(spec::AbstractDict, act_map) -> BatchNorm
+
+Build a `BatchNorm` layer from a TOML specification.
+Requires `size` (or `channels`) field. Supports optional `affine` and `track_stats`.
+"""
 function batchnorm_layer(spec::AbstractDict, act_map)
     size = get(spec, "size", get(spec, "channels", nothing))
     size === nothing && throw(ArgumentError("BatchNorm layer is missing the 'size' field."))
@@ -148,12 +281,24 @@ function batchnorm_layer(spec::AbstractDict, act_map)
     return BatchNorm(Int(size), activation; affine=affine, track_stats=track_stats)
 end
 
+"""
+    dropout_layer(spec::AbstractDict) -> Dropout
+
+Build a `Dropout` layer from a TOML specification.
+Requires `rate` (or `p`) field.
+"""
 function dropout_layer(spec::AbstractDict)
     rate = get(spec, "rate", get(spec, "p", nothing))
     rate === nothing && throw(ArgumentError("Dropout layer is missing the 'rate' field."))
     return Dropout(Float64(rate))
 end
 
+"""
+    build_layer(spec, act_map)
+
+Build a single Flux layer from a TOML specification dictionary.
+Supports: Dense, Conv, Reshape, Flatten, MaxPool, MeanPool, GlobalAveragePool, BatchNorm, Dropout.
+"""
 function build_layer(spec::AbstractDict, act_map)
     haskey(spec, "type") || throw(ArgumentError("Layer specification is missing the 'type' field."))
     layer_type = normalize_type_name(spec["type"])
@@ -181,12 +326,24 @@ function build_layer(spec::AbstractDict, act_map)
     throw(ArgumentError("Unsupported layer type '$layer_type'. Supported types: Dense, Conv, Reshape, Flatten, MaxPool, MeanPool, GlobalAveragePool, BatchNorm, Dropout."))
 end
 
+"""
+    build_layer_stack(layer_specs, act_map, stack_name) -> Chain
+
+Build a `Chain` of layers from an array of TOML layer specifications.
+Validates that the stack is a non-empty array.
+"""
 function build_layer_stack(layer_specs, act_map, stack_name::AbstractString)
     layer_specs isa AbstractVector || throw(ArgumentError("Model configuration layer stack '$stack_name' must be an array of layer specifications."))
     isempty(layer_specs) && throw(ArgumentError("Model configuration layer stack '$stack_name' must not be empty."))
     return Chain([build_layer(layer, act_map) for layer in layer_specs]...)
 end
 
+"""
+    build_model(model_cfg) -> AwaleModel
+
+Construct an `AwaleModel` from a parsed TOML configuration section.
+Expects `shared`, `policy`, and `value` layer stacks.
+"""
 function build_model(model_cfg)
     haskey(model_cfg, "layers") || throw(ArgumentError("Model configuration is missing the 'layers' section."))
     layers = model_cfg["layers"]
@@ -202,6 +359,13 @@ function build_model(model_cfg)
     return AwaleModel(shared_layers, policy_layers, value_layers)
 end
 
+"""
+    select_model_config(model_cfg, architecture::String)
+
+Select the architecture variant from a model configuration that contains a `variants`
+dictionary, or return the config as-is if no variants are defined.
+Throws `ArgumentError` if the architecture is not among the available variants.
+"""
 function select_model_config(model_cfg, architecture::String)
     if haskey(model_cfg, "variants")
         variants = model_cfg["variants"]
@@ -213,6 +377,12 @@ function select_model_config(model_cfg, architecture::String)
     return model_cfg
 end
 
+"""
+    create_model(config_path::String=...) -> AwaleModel
+
+Load model configuration from TOML and build the neural network.
+Reads architecture selection and variant config from the file.
+"""
 function create_model(config_path::String=joinpath(@__DIR__, "config.toml"))
     config = TOML.parsefile(config_path)
     model_cfg = config["model"]
@@ -221,6 +391,12 @@ function create_model(config_path::String=joinpath(@__DIR__, "config.toml"))
     return build_model(selected_cfg)
 end
 
+"""
+    predict_raw(model::AwaleModel, X::AbstractMatrix{Float32}) -> (logits, value)
+
+Run forward pass through shared trunk, policy head, and value head.
+Returns policy logits and a scalar value estimate.
+"""
 function predict_raw(model::AwaleModel, X::AbstractMatrix{Float32})
     shared_out = model.shared(X)
     logits = model.policy(shared_out)
@@ -228,6 +404,12 @@ function predict_raw(model::AwaleModel, X::AbstractMatrix{Float32})
     return logits, value
 end
 
+"""
+    with_inference_mode(f, model::AwaleModel)
+
+Execute `f` with `model` in test mode, restoring train mode on exit
+(even if `f` throws an error).
+"""
 function with_inference_mode(f::Function, model::AwaleModel)
     Flux.testmode!(model)
     try
@@ -237,6 +419,11 @@ function with_inference_mode(f::Function, model::AwaleModel)
     end
 end
 
+"""
+    predict_inference(model::AwaleModel, s::GameState) -> (logits, value)
+
+Run inference on a single state, switching the model to test mode temporarily.
+"""
 function predict_inference(model::AwaleModel, s::GameState)
     s_can = canonicalize(s)
     x = reshape(vec(encode_state(s_can)), :, 1)
@@ -246,11 +433,21 @@ function predict_inference(model::AwaleModel, s::GameState)
     end, model)
 end
 
+"""
+    predict_batch_inference(model::AwaleModel, states::Vector{GameState}) -> (logits, values)
+
+Run batched inference with test mode, returning raw logits and values.
+"""
 function predict_batch_inference(model::AwaleModel, states::Vector{GameState})
     X = hcat([vec(encode_state(canonicalize(s))) for s in states]...)
     return with_inference_mode(() -> predict_raw(model, X), model)
 end
 
+"""
+    predict(model::AwaleModel, s::GameState) -> (logits, value)
+
+Forward pass on a single state in train mode. Prefer `predict_inference` for inference.
+"""
 function predict(model::AwaleModel, s::GameState)
     s_can = canonicalize(s)
     x = reshape(vec(encode_state(s_can)), :, 1)
@@ -258,19 +455,40 @@ function predict(model::AwaleModel, s::GameState)
     return vec(logits), value[1]
 end
 
+"""
+    predict_batch(model::AwaleModel, states::Vector{GameState}) -> (logits, values)
+
+Batched forward pass in train mode.
+"""
 function predict_batch(model::AwaleModel, states::Vector{GameState})
     X = hcat([vec(encode_state(canonicalize(s))) for s in states]...)
     return predict_raw(model, X)
 end
 
+"""
+    predict_inference(model, s::GameState) -> (logits, value)
+
+Fallback for untyped model arguments; delegates to `predict`.
+"""
 function predict_inference(model, s::GameState)
     return predict(model, s)
 end
 
+"""
+    predict_batch_inference(model, states::Vector{GameState}) -> (logits, values)
+
+Fallback for untyped model arguments; delegates to `predict_batch`.
+"""
 function predict_batch_inference(model, states::Vector{GameState})
     return predict_batch(model, states)
 end
 
+"""
+    atomic_write(write_fn::Function, path::AbstractString) -> String
+
+Write a file atomically: data is first written to a temporary file in the same directory,
+then renamed to the target `path`. Cleans up the temp file on failure.
+"""
 function atomic_write(write_fn::Function, path::AbstractString)
     parent = dirname(path)
     isdir(parent) || mkpath(parent)
@@ -296,6 +514,11 @@ function atomic_write(write_fn::Function, path::AbstractString)
     return path
 end
 
+"""
+    public_model_weights(model::AwaleModel) -> Vector{Float32}
+
+Extract model parameters as a flat `Float32` weight vector for public export.
+"""
 function public_model_weights(model::AwaleModel)::Vector{Float32}
     weights, _ = Flux.destructure(model)
     return Float32.(weights)
@@ -332,6 +555,11 @@ function save_public_model(model::AwaleModel, path::AbstractString)
     return path
 end
 
+"""
+    public_model_config_path(path::AbstractString) -> String
+
+Return the expected path of the `model_config.toml` file next to a public model checkpoint.
+"""
 function public_model_config_path(path::AbstractString)::String
     return joinpath(dirname(String(path)), "model_config.toml")
 end
