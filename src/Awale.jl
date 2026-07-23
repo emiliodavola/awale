@@ -1,6 +1,9 @@
-module Awale
+"""
+    Awale
 
-# Awale: specification-first Awale RL project
+Specification-first Awale RL project using AlphaZero-style MCTS + self-play.
+"""
+module Awale
 
 include("Awale/Utils.jl")
 include("Awale/State.jl")
