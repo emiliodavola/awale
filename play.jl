@@ -21,6 +21,8 @@ const DEFAULT_AGENT2_SPEC = "human"
 const DEFAULT_SIMS = Int(get(eval_cfg, "sims_per_eval", 100))
 const MAX_TURNS = Int(training_cfg["max_turns"])
 const C_PUCT = Float32(mcts_cfg["c_puct"])
+const DIRICHLET_ALPHA = Float32(get(mcts_cfg, "dirichlet_alpha", 0.3))
+const DIRICHLET_EPSILON = Float32(get(mcts_cfg, "dirichlet_epsilon", 0.25))
 CHECKPOINT_DIR = String(training_cfg["checkpoint_dir"])
 MODEL_CONFIG_PATH = abspath(ROOT_DIR, String(get(training_cfg, "model_config_path", joinpath("src", "Awale", "config.toml"))))
 
@@ -206,7 +208,7 @@ function resolve_agent(spec::AbstractString, sims::Int)
     isfile(path) || throw(ArgumentError("Checkpoint not found for '$spec' at '$path'"))
 
     model = load_model(path)
-    mcts = MCTSSearch(model, C_PUCT, Dict{UInt64, Tuple{Float32, Int64}}())
+    mcts = MCTSSearch(model, C_PUCT, DIRICHLET_ALPHA, DIRICHLET_EPSILON, Dict{UInt64, Tuple{Float64, Int64}}())
     return ModelAgent(mcts, sims), agent_label(spec)
 end
 
