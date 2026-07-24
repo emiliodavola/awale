@@ -17,7 +17,7 @@ function setup_benchmarks()
     s = Awale.initial_state(config)
 
     model = Awale.create_model()
-    mcts = Awale.MCTSSearch(model, 1.4f0, Dict{UInt64, Tuple{Float32, Int64}}())
+    mcts = Awale.MCTSSearch(model, 1.4f0, 0.3f0, 0.25f0, Dict{UInt64, Tuple{Float64, Int64}}())
 
     root = Awale.MCTS.MCTSNode(s)
     for a in 1:6
