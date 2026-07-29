@@ -13,6 +13,7 @@ using ..MCTS: MCTSSearch, search_with_stats
 using ..ReplayBuffers: Experience, ReplayBuffer, push_experience!, sample_batch
 using Flux
 using Random
+using Statistics
 
 export play_game,
     collect_selfplay_data, train_step, run_training_iteration, backfill_value_targets
@@ -340,14 +341,10 @@ function run_training_iteration(
 
         # ── MCTS Diagnostics ──────────────────────────
         if !isempty(all_kl_per_position)
-            sorted_kl = sort(all_kl_per_position)
-            n_kl = length(sorted_kl)
             kl_mean = sum(all_kl_per_position) / length(all_kl_per_position)
-            kl_med = sorted_kl[div(n_kl, 2)+1]
-            kl_max = sorted_kl[end]
-            kl_p25 = sorted_kl[max(1, round(Int, 0.25 * n_kl))]
-            kl_p75 = sorted_kl[min(n_kl, round(Int, 0.75 * n_kl))]
-            kl_p95 = sorted_kl[min(n_kl, round(Int, 0.95 * n_kl))]
+            kl_med = median(all_kl_per_position)
+            kl_max = maximum(all_kl_per_position)
+            kl_p25, kl_p75, kl_p95 = quantile(all_kl_per_position, [0.25, 0.75, 0.95])
 
             println("  ── MCTS Diagnostics ──────────────────────────")
             println("    KL(target || network)")
@@ -367,16 +364,11 @@ function run_training_iteration(
             )
 
             if !isempty(all_root_confidences)
-                sorted_rc = sort(all_root_confidences)
-                n_rc = length(sorted_rc)
                 rc_mean = sum(all_root_confidences) / length(all_root_confidences)
-                rc_med = sorted_rc[div(n_rc, 2)+1]
-                rc_min = sorted_rc[1]
-                rc_max = sorted_rc[end]
-                rc_p25 = sorted_rc[max(1, round(Int, 0.25 * n_rc))]
-                rc_p50 = sorted_rc[max(1, round(Int, 0.50 * n_rc))]
-                rc_p75 = sorted_rc[min(n_rc, round(Int, 0.75 * n_rc))]
-                rc_p95 = sorted_rc[min(n_rc, round(Int, 0.95 * n_rc))]
+                rc_med = median(all_root_confidences)
+                rc_min = minimum(all_root_confidences)
+                rc_max = maximum(all_root_confidences)
+                rc_p25, rc_p50, rc_p75, rc_p95 = quantile(all_root_confidences, [0.25, 0.50, 0.75, 0.95])
                 println("    Root confidence")
                 println(
                     "      Mean: $(round(rc_mean, digits=4))   Median: $(round(rc_med, digits=4))",
@@ -389,27 +381,19 @@ function run_training_iteration(
                 )
             end
 
-            sorted_l1 = sort(all_l1_per_position)
-            n_l1 = length(sorted_l1)
             l1_mean = sum(all_l1_per_position) / length(all_l1_per_position)
-            l1_med = sorted_l1[div(n_l1, 2)+1]
-            l1_p25 = sorted_l1[max(1, round(Int, 0.25 * n_l1))]
-            l1_p75 = sorted_l1[min(n_l1, round(Int, 0.75 * n_l1))]
-            l1_p95 = sorted_l1[min(n_l1, round(Int, 0.95 * n_l1))]
+            l1_med = median(all_l1_per_position)
+            l1_p25, l1_p75, l1_p95 = quantile(all_l1_per_position, [0.25, 0.75, 0.95])
             println("    Policy distance (L1)")
             println(
                 "      Mean: $(round(l1_mean, digits=4))   Median: $(round(l1_med, digits=4))   P25: $(round(l1_p25, digits=4))   P75: $(round(l1_p75, digits=4))   P95: $(round(l1_p95, digits=4))",
             )
 
-            sorted_ent = sort(all_pos_entropy)
-            n_ent = length(sorted_ent)
             ent_mean = sum(all_pos_entropy) / length(all_pos_entropy)
-            ent_med = sorted_ent[div(n_ent, 2)+1]
-            ent_min = sorted_ent[1]
-            ent_max = sorted_ent[end]
-            ent_p25 = sorted_ent[max(1, round(Int, 0.25 * n_ent))]
-            ent_p75 = sorted_ent[min(n_ent, round(Int, 0.75 * n_ent))]
-            ent_p95 = sorted_ent[min(n_ent, round(Int, 0.95 * n_ent))]
+            ent_med = median(all_pos_entropy)
+            ent_min = minimum(all_pos_entropy)
+            ent_max = maximum(all_pos_entropy)
+            ent_p25, ent_p75, ent_p95 = quantile(all_pos_entropy, [0.25, 0.75, 0.95])
             println("    Target policy entropy")
             println(
                 "      Mean: $(round(ent_mean, digits=4))   Median: $(round(ent_med, digits=4))   Min: $(round(ent_min, digits=4))   Max: $(round(ent_max, digits=4))",
