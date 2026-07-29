@@ -8,7 +8,6 @@ module Metrics
 
 using ..State: GameState
 using ..Model: encode_state
-using Dates
 using Printf
 
 export EloTracker, ProgressTracker, PromotionRecord, update_elo!, promote_elo!,

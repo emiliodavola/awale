@@ -13,7 +13,7 @@ using .Awale.Publication: release_summary_path, release_id_slug, release_timesta
 using .Awale.Utils: architecture_slug, architecture_scoped_path, architecture_scoped_candidates, first_existing_path
 using Random
 using TOML
-using Dates
+import Dates: now as date_now, format as date_format
 
 config = TOML.parsefile(joinpath(ROOT_DIR, "config.toml"))
 training_cfg = config["training"]
@@ -118,7 +118,7 @@ end
 Return a timestamped path for a training configuration log file.
 """
 function training_log_file_path()
-    timestamp = Dates.format(Dates.now(), "yyyy_mm_dd_HH_mm")
+    timestamp = date_format(date_now(), "yyyy_mm_dd_HH_mm")
     architecture = architecture_slug(model_architecture_name())
     return joinpath(training_log_dir(), "training_config_$(architecture)_$timestamp.toml")
 end
