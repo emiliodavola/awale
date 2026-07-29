@@ -11,7 +11,13 @@ using ..Env: is_terminal, transition, legal_actions, reward
 using ..MCTS: MCTSSearch, search
 using Random
 
-export RandomAgent, HeuristicAgent, ModelAgent, evaluate_agents, evaluate_agents_on_openings, generate_opening_suite, play_match
+export RandomAgent,
+    HeuristicAgent,
+    ModelAgent,
+    evaluate_agents,
+    evaluate_agents_on_openings,
+    generate_opening_suite,
+    play_match
 
 """
     result_from_terminal_state(state::GameState) -> Int
@@ -63,7 +69,8 @@ end
 Destructure a `MatchOutcome` into `(result, turns_played)` for convenient unpacking.
 """
 Base.iterate(outcome::MatchOutcome) = (outcome.result, 1)
-Base.iterate(outcome::MatchOutcome, state::Int) = state == 1 ? (outcome.turns_played, 2) : nothing
+Base.iterate(outcome::MatchOutcome, state::Int) =
+    state == 1 ? (outcome.turns_played, 2) : nothing
 
 """
     RandomAgent
@@ -77,7 +84,7 @@ struct RandomAgent end
 
 Select a legal action uniformly at random. Baseline agent for comparison.
 """
-function select_action(::RandomAgent, s::GameState, rng=Random.default_rng())
+function select_action(::RandomAgent, s::GameState, rng = Random.default_rng())
     actions = legal_actions(s)
     return actions[rand(rng, 1:length(actions))]
 end
@@ -95,7 +102,7 @@ struct HeuristicAgent end
 
 Select the legal action that maximises immediate captures (greedy heuristic).
 """
-function select_action(::HeuristicAgent, s::GameState, rng=Random.default_rng())
+function select_action(::HeuristicAgent, s::GameState, rng = Random.default_rng())
     actions = legal_actions(s)
     isempty(actions) && return 0
 
@@ -105,8 +112,8 @@ function select_action(::HeuristicAgent, s::GameState, rng=Random.default_rng())
 
     for action in actions
         next_state = transition(s, action)
-        gain = current_player == 1 ?
-            (Int(next_state.captured[1]) - Int(s.captured[1])) :
+        gain =
+            current_player == 1 ? (Int(next_state.captured[1]) - Int(s.captured[1])) :
             (Int(next_state.captured[2]) - Int(s.captured[2]))
 
         if gain > max_gain
@@ -134,8 +141,8 @@ end
 
 Select an action using MCTS search with the agent's neural model.
 """
-function select_action(agent::ModelAgent, s::GameState, rng=Random.default_rng())
-    return search(agent.mcts, s, agent.sims, rng; add_root_noise=false)
+function select_action(agent::ModelAgent, s::GameState, rng = Random.default_rng())
+    return search(agent.mcts, s, agent.sims, rng; add_root_noise = false)
 end
 
 """
@@ -144,7 +151,13 @@ end
 Play a match starting from a given state, alternating agents.
 Returns a `MatchOutcome` with result, turn count, and cutoff flag.
 """
-function play_match_from_state(initial_state::GameState, agent_p1, agent_p2, rng; max_turns::Int)
+function play_match_from_state(
+    initial_state::GameState,
+    agent_p1,
+    agent_p2,
+    rng;
+    max_turns::Int,
+)
     state = initial_state
     turn = 1
     turns_played = 0
@@ -168,7 +181,13 @@ end
 Play a match from the initial position with the given game config.
 """
 function play_match(agent_p1, agent_p2, config, rng; max_turns::Int)
-    return play_match_from_state(initial_state(config), agent_p1, agent_p2, rng; max_turns=max_turns)
+    return play_match_from_state(
+        initial_state(config),
+        agent_p1,
+        agent_p2,
+        rng;
+        max_turns = max_turns,
+    )
 end
 
 """
@@ -177,14 +196,19 @@ end
 Generate a reproducible set of opening positions for agent evaluation.
 For each ply depth, creates `openings_per_ply` random positions.
 """
-function generate_opening_suite(; plies::Vector{Int}, openings_per_ply::Int, seed::Int, config::GameConfig=GameConfig())
+function generate_opening_suite(;
+    plies::Vector{Int},
+    openings_per_ply::Int,
+    seed::Int,
+    config::GameConfig = GameConfig(),
+)
     rng = MersenneTwister(seed)
     openings = GameState[]
 
     for ply_count in plies
-        for _ in 1:openings_per_ply
+        for _ = 1:openings_per_ply
             state = initial_state(config)
-            for _ in 1:ply_count
+            for _ = 1:ply_count
                 actions = legal_actions(state)
                 isempty(actions) && break
                 action = actions[rand(rng, 1:length(actions))]
@@ -204,18 +228,27 @@ end
 Evaluate two agents across a suite of opening positions, swapping sides.
 Returns a named tuple with wins, losses, draws, and average turns.
 """
-function evaluate_agents_on_openings(agent1, agent2, openings, n_games::Int, rng; max_turns::Int)
+function evaluate_agents_on_openings(
+    agent1,
+    agent2,
+    openings,
+    n_games::Int,
+    rng;
+    max_turns::Int,
+)
     wins = 0
     losses = 0
     draws = 0
     total_turns = 0
 
-    for game_idx in 1:n_games
+    for game_idx = 1:n_games
         opening = openings[mod1(game_idx, length(openings))]
         if game_idx % 2 == 0
-            result, turns = play_match_from_state(opening, agent1, agent2, rng; max_turns=max_turns)
+            result, turns =
+                play_match_from_state(opening, agent1, agent2, rng; max_turns = max_turns)
         else
-            result, turns = play_match_from_state(opening, agent2, agent1, rng; max_turns=max_turns)
+            result, turns =
+                play_match_from_state(opening, agent2, agent1, rng; max_turns = max_turns)
             result = -result
         end
 
@@ -229,7 +262,7 @@ function evaluate_agents_on_openings(agent1, agent2, openings, n_games::Int, rng
         end
     end
 
-    return (wins=wins, losses=losses, draws=draws, avg_turns=total_turns / n_games)
+    return (wins = wins, losses = losses, draws = draws, avg_turns = total_turns / n_games)
 end
 
 """
@@ -244,11 +277,11 @@ function evaluate_agents(agent1, agent2, n_games::Int, config, rng; max_turns::I
     draws = 0
     total_turns = 0
 
-    for game_idx in 1:n_games
+    for game_idx = 1:n_games
         if game_idx % 2 == 0
-            result, turns = play_match(agent1, agent2, config, rng; max_turns=max_turns)
+            result, turns = play_match(agent1, agent2, config, rng; max_turns = max_turns)
         else
-            result, turns = play_match(agent2, agent1, config, rng; max_turns=max_turns)
+            result, turns = play_match(agent2, agent1, config, rng; max_turns = max_turns)
             result = -result
         end
 
@@ -262,7 +295,7 @@ function evaluate_agents(agent1, agent2, n_games::Int, config, rng; max_turns::I
         end
     end
 
-    return (wins=wins, losses=losses, draws=draws, avg_turns=total_turns / n_games)
+    return (wins = wins, losses = losses, draws = draws, avg_turns = total_turns / n_games)
 end
 
 end # module

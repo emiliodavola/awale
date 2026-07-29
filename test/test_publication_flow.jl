@@ -103,6 +103,8 @@ end
             @test occursin("Commit SHA: abc123", model_card)
             @test occursin("Best selection score: 62.5", model_card)
             @test !occursin("Transformers", model_card)
+            @test occursin("## Code", model_card)
+            @test occursin("github.com/emiliodavola/awale", model_card)
             @test Awale.Publication.default_repo_path("mlp", "20260719_120000") == "releases/mlp/20260719_120000"
         end
     end

@@ -3,7 +3,9 @@ const ROOT_DIR = @__DIR__
 include(joinpath(ROOT_DIR, "src", "Awale.jl"))
 using .Awale
 using .Awale.Training: run_training_iteration
-using .Awale.Model: save_model, load_model, atomic_write
+using .Awale.State: GameState, GameConfig, initial_state, canonicalize, encode_state
+using .Awale.Env: legal_actions, transition, is_terminal
+using .Awale.Model: save_model, load_model, atomic_write, predict_raw, with_inference_mode
 using .Awale.Evaluation: HeuristicAgent, RandomAgent, ModelAgent, evaluate_agents, evaluate_agents_on_openings, generate_opening_suite
 using .Awale.MCTS: MCTSSearch
 using .Awale.ReplayBuffers: ReplayBuffer
@@ -11,7 +13,7 @@ using .Awale.Publication: release_summary_path, release_id_slug, release_timesta
 using .Awale.Utils: architecture_slug, architecture_scoped_path, architecture_scoped_candidates, first_existing_path
 using Random
 using TOML
-using Dates
+import Dates: now as date_now, format as date_format
 
 config = TOML.parsefile(joinpath(ROOT_DIR, "config.toml"))
 training_cfg = config["training"]
@@ -116,7 +118,7 @@ end
 Return a timestamped path for a training configuration log file.
 """
 function training_log_file_path()
-    timestamp = Dates.format(Dates.now(), "yyyy_mm_dd_HH_mm")
+    timestamp = date_format(date_now(), "yyyy_mm_dd_HH_mm")
     architecture = architecture_slug(model_architecture_name())
     return joinpath(training_log_dir(), "training_config_$(architecture)_$timestamp.toml")
 end
@@ -521,6 +523,76 @@ function should_save_snapshot(iter::Int, num_iterations::Int, checkpoint_every::
 end
 
 """
+    save_promotion_history(pt::Awale.Metrics.ProgressTracker, path::String)
+
+Serialize ProgressTracker state and promotion records to a TOML file for resume support.
+"""
+function save_promotion_history(pt::Awale.Metrics.ProgressTracker, path::String)
+    open(path, "w") do io
+        println(io, "[promotion_history]")
+        println(io, "total_promotions = $(pt.total_promotions)")
+        println(io, "longest_streak = $(pt.longest_streak)")
+        println(io, "current_streak = $(pt.current_streak)")
+        println(io, "last_best_iter = $(pt.last_best_iter)")
+        if !isempty(pt.inter_promotion_gaps)
+            gaps_str = "[" * join(string.(pt.inter_promotion_gaps), ", ") * "]"
+            println(io, "inter_promotion_gaps = $gaps_str")
+        end
+        for (i, rec) in enumerate(pt.promotions)
+            println(io, "[[promotions]]")
+            println(io, "iteration = $(rec.iteration)")
+            println(io, "win_rate_vs_best = $(rec.win_rate_vs_best)")
+            println(io, "wins = $(rec.wins)")
+            println(io, "losses = $(rec.losses)")
+            println(io, "draws = $(rec.draws)")
+            if rec.random_anchor_wr !== nothing
+                println(io, "random_anchor_wr = $(rec.random_anchor_wr)")
+            end
+            println(io, "promotion_score = $(rec.promotion_score)")
+        end
+    end
+end
+
+"""
+    load_promotion_history!(pt::Awale.Metrics.ProgressTracker, path::String)
+
+Deserialize ProgressTracker state and promotion records from a TOML file for resume support.
+Silently handles missing or corrupt files.
+"""
+function load_promotion_history!(pt::Awale.Metrics.ProgressTracker, path::String)
+    if !isfile(path)
+        return
+    end
+    data = try
+        TOML.parsefile(path)
+    catch
+        @warn "Corrupt promotion history file, starting fresh: $path"
+        return
+    end
+    hist = get(data, "promotion_history", Dict())
+    pt.total_promotions = Int(get(hist, "total_promotions", 0))
+    pt.longest_streak = Int(get(hist, "longest_streak", 0))
+    pt.current_streak = Int(get(hist, "current_streak", 0))
+    pt.last_best_iter = Int(get(hist, "last_best_iter", 0))
+    gaps = get(hist, "inter_promotion_gaps", Int[])
+    pt.inter_promotion_gaps = gaps
+    # Reload per-promotion records
+    raw_promos = get(data, "promotions", [])
+    for p in raw_promos
+        promo = Awale.Metrics.PromotionRecord(
+            Int(get(p, "iteration", 0)),
+            Float64(get(p, "win_rate_vs_best", 50.0)),
+            Int(get(p, "wins", 0)),
+            Int(get(p, "losses", 0)),
+            Int(get(p, "draws", 0)),
+            get(p, "random_anchor_wr", nothing),
+            Float64(get(p, "promotion_score", 0.0)),
+        )
+        push!(pt.promotions, promo)
+    end
+end
+
+"""
     main(args::Vector{String}=Base.ARGS)
 
 Entry point for the training pipeline. Parses CLI args (e.g. `--reset`),
@@ -598,11 +670,55 @@ function main(args::Vector{String}=Base.ARGS)
     evaluation_mcts = MCTSSearch(model[], C_PUCT, DIRICHLET_ALPHA, DIRICHLET_EPSILON, Dict{UInt64, Tuple{Float64, Int64}}())
     agent_random = RandomAgent()
 
+    # ── Network drift reference set ────────────────────────
+    drift_rng = Random.MersenneTwister(42)
+    reference_states = GameState[]
+    for _ in 1:20
+        state = initial_state(GameConfig())
+        for _ in 1:50
+            is_terminal(state) && break
+            push!(reference_states, canonicalize(state))
+            actions = legal_actions(state)
+            isempty(actions) && break
+            state = transition(state, actions[rand(drift_rng, 1:length(actions))])
+        end
+    end
+    if length(reference_states) > 200
+        reference_states = reference_states[1:200]
+    end
+    println("  Network drift reference set: $(length(reference_states)) states")
+    drift_X = hcat([vec(encode_state(canonicalize(s))) for s in reference_states]...)
+
+    # ── Training-progress trackers ──────────────────────────
+    elo_tracker = Awale.Metrics.EloTracker()
+    progress_tracker = Awale.Metrics.ProgressTracker()
+    promotion_history_file = joinpath(checkpoint_namespace_dir(), "promotion_history.toml")
+    learning_curve_file = joinpath(training_log_dir(), "learning_curve_$(architecture_slug(model_architecture_name()))_$(release_id).csv")
+
+    # CSV: append on resume, write header only for new files
+    csv_fresh = !isfile(learning_curve_file) || filesize(learning_curve_file) == 0
+    csv_io = open(learning_curve_file, "a")
+
+    # Promotion history: restore tracked state on resume
+    if isfile(promotion_history_file)
+        println("Loading promotion history from: $promotion_history_file")
+        load_promotion_history!(progress_tracker, promotion_history_file)
+    end
+
+    try
+    if csv_fresh
+        Awale.Metrics.write_csv_header(csv_io)
+    end
+
     if start_iter[] <= NUM_ITERATIONS
         for iter in start_iter[]:NUM_ITERATIONS
             println("\nIteration $iter / $NUM_ITERATIONS")
 
-            loss = run_training_iteration(
+            # Compute network drift before this iteration
+            before_logits, _ = with_inference_mode(() -> predict_raw(model[], drift_X), model[])
+
+            old_params_vec, _ = Flux.destructure(model[])
+            training_result = run_training_iteration(
                 training_mcts,
                 optimizer,
                 model[],
@@ -617,9 +733,23 @@ function main(args::Vector{String}=Base.ARGS)
                 rng=rng,
                 max_turns=MAX_TURNS,
             )
+            new_params_vec, _ = Flux.destructure(model[])
+            param_update_norm = sqrt(sum((new_params_vec .- old_params_vec) .^ 2))
+            loss = training_result.avg_loss
             println("  Average loss: $(round(loss, digits=4))")
+            println("  Param update norm: $(round(param_update_norm, digits=6))")
             println("  Replay buffer: $(length(replay_buffer)) samples")
             last_loss[] = Float64(loss)
+
+            # ── Network Drift ─────────────────────────────
+            after_logits, _ = with_inference_mode(() -> predict_raw(model[], drift_X), model[])
+            before_log_probs = Flux.logsoftmax(before_logits, dims=1)
+            after_probs_drift = softmax(after_logits, dims=1)
+            drift_kl = sum(exp.(before_log_probs) .* (before_log_probs .- log.(clamp.(after_probs_drift, 1.0f-10, 1.0f0))), dims=1)
+            avg_drift_kl = sum(drift_kl) / length(drift_kl)
+            println("  ── Network Drift ─────────────────────────────")
+            println("    Avg KL(network_before || network_after): $(round(avg_drift_kl, digits=4))")
+            println("  ────────────────────────────────────────────────")
 
             agent_model = ModelAgent(evaluation_mcts, SIMS_PER_EVAL)
             results = evaluate_agents(agent_model, agent_random, EVAL_GAMES, Awale.GameConfig(), rng; max_turns=MAX_TURNS)
@@ -644,10 +774,46 @@ function main(args::Vector{String}=Base.ARGS)
                 println("  Candidate vs $(report.name) anchor: $(round(report.decided_win_rate, digits=2))% decided wins (W:$(anchor_results.wins) L:$(anchor_results.losses) D:$(anchor_results.draws))")
             end
 
+            # Update Elo from candidate vs current-best results
+            if selection.current_best_results !== nothing
+                br = selection.current_best_results
+                Awale.Metrics.update_elo!(elo_tracker, br.wins, br.losses, br.draws, iter)
+            end
+
+            promoted_flag = false
             if maybe_promote_best!(model[], best_selection_score, selection)
                 println("  ✅ New best model saved to: $(training_best_checkpoint_path())")
+                promoted_flag = true
+
+                # Build promotion record
+                random_wr = nothing
+                for report in selection.anchor_reports
+                    if report.name == "random"
+                        random_wr = report.decided_win_rate
+                    end
+                end
+                promo_record = Awale.Metrics.PromotionRecord(
+                    iter,
+                    selection.current_best_rate === nothing ? 50.0 : selection.current_best_rate,
+                    selection.current_best_results === nothing ? 0 : selection.current_best_results.wins,
+                    selection.current_best_results === nothing ? 0 : selection.current_best_results.losses,
+                    selection.current_best_results === nothing ? 0 : selection.current_best_results.draws,
+                    random_wr,
+                    selection.promotion_score,
+                )
+                Awale.Metrics.record_promotion!(progress_tracker, iter, promo_record)
+                Awale.Metrics.promote_elo!(elo_tracker)
+
+                # Promotion event print (R8)
+                gap = progress_tracker.total_promotions <= 1 ? iter : progress_tracker.inter_promotion_gaps[end]
+                Awale.Metrics.print_promotion_event(
+                    progress_tracker.total_promotions,
+                    gap,
+                    selection.current_best_rate,
+                )
+                save_promotion_history(progress_tracker, promotion_history_file)
             else
-                println("  ↳ Best not promoted: failed $(join(selection.gate_reasons, ", ")).")
+                Awale.Metrics.record_non_promotion!(progress_tracker)
             end
 
             if should_save_snapshot(iter, NUM_ITERATIONS, CHECKPOINT_EVERY)
@@ -655,6 +821,29 @@ function main(args::Vector{String}=Base.ARGS)
                 save_model(model[], snapshot_path)
                 println("  📦 Snapshot saved to: $snapshot_path")
             end
+
+            # Write learning curve CSV row
+            Awale.Metrics.write_csv_row(
+                csv_io,
+                iter,
+                training_result.avg_loss,
+                training_result.avg_policy_loss,
+                training_result.avg_value_loss,
+                training_result.avg_grad_norm,
+                training_result.avg_pred_entropy,
+                training_result.avg_target_entropy,
+                param_update_norm,
+                training_result.replay_pct,
+                training_result.avg_game_len,
+                win_rate,
+                selection.current_best_rate,
+                promoted_flag,
+                elo_tracker.candidate_rating,
+                elo_tracker.best_rating,
+            )
+            flush(csv_io)
+
+            Awale.Metrics.print_progress_diagnostics(param_update_norm, progress_tracker, elo_tracker, iter)
 
             write_training_state(training_state_file_path(), iter, best_selection_score[])
             last_completed_iter[] = iter
@@ -666,6 +855,10 @@ function main(args::Vector{String}=Base.ARGS)
 
     else
         println("--- Training already completed. ---")
+    end
+
+    finally
+        close(csv_io)
     end
 
     if start_iter[] > NUM_ITERATIONS && last_completed_iter[] == 0

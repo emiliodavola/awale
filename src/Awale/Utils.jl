@@ -5,7 +5,13 @@ Deterministic helpers: hashing, formatting, and checkpoint path resolution.
 """
 module Utils
 
-export fnv1a64, bytes_to_hex, architecture_slug, checkpoint_fragment, architecture_scoped_path, architecture_scoped_candidates, first_existing_path
+export fnv1a64,
+    bytes_to_hex,
+    architecture_slug,
+    checkpoint_fragment,
+    architecture_scoped_path,
+    architecture_scoped_candidates,
+    first_existing_path
 
 using Printf
 
@@ -54,7 +60,10 @@ end
 Extract the filename portion from a configured checkpoint path,
 falling back to `default_filename` if empty.
 """
-function checkpoint_fragment(configured_path::AbstractString, default_filename::AbstractString)::String
+function checkpoint_fragment(
+    configured_path::AbstractString,
+    default_filename::AbstractString,
+)::String
     configured = strip(String(configured_path))
     default_fragment = basename(String(default_filename))
 
@@ -67,7 +76,12 @@ end
 
 Resolve a checkpoint path under an architecture-scoped subdirectory.
 """
-function architecture_scoped_path(base_dir::AbstractString, architecture::AbstractString, configured_path::AbstractString, default_filename::AbstractString)::String
+function architecture_scoped_path(
+    base_dir::AbstractString,
+    architecture::AbstractString,
+    configured_path::AbstractString,
+    default_filename::AbstractString,
+)::String
     configured = strip(String(configured_path))
     if isabspath(configured)
         return configured
@@ -83,7 +97,12 @@ end
 Return ordered candidate paths for checkpoint lookup, checking the
 architecture-scoped path first, then the legacy flat path.
 """
-function architecture_scoped_candidates(base_dir::AbstractString, architecture::AbstractString, configured_path::AbstractString, default_filename::AbstractString)::Vector{String}
+function architecture_scoped_candidates(
+    base_dir::AbstractString,
+    architecture::AbstractString,
+    configured_path::AbstractString,
+    default_filename::AbstractString,
+)::Vector{String}
     configured = strip(String(configured_path))
     if isabspath(configured)
         return String[configured]
@@ -100,7 +119,7 @@ end
 
 Return the first path from `candidates` that exists on disk, or `nothing`.
 """
-function first_existing_path(candidates)::Union{String, Nothing}
+function first_existing_path(candidates)::Union{String,Nothing}
     for candidate in candidates
         isfile(candidate) && return String(candidate)
     end

@@ -14,6 +14,7 @@ include("Awale/ReplayBuffers.jl")
 include("Awale/Publication.jl")
 include("Awale/Training.jl")
 include("Awale/Evaluation.jl")
+include("Awale/Metrics.jl")
 
 using .Utils
 using .State
@@ -24,6 +25,7 @@ using .ReplayBuffers
 using .Publication
 using .Training
 using .Evaluation
+using .Metrics
 
 export *
 
