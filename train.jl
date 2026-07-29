@@ -3,7 +3,9 @@ const ROOT_DIR = @__DIR__
 include(joinpath(ROOT_DIR, "src", "Awale.jl"))
 using .Awale
 using .Awale.Training: run_training_iteration
-using .Awale.Model: save_model, load_model, atomic_write
+using .Awale.State: GameState, GameConfig, initial_state, canonicalize, encode_state
+using .Awale.Env: legal_actions, transition, is_terminal
+using .Awale.Model: save_model, load_model, atomic_write, predict_raw, with_inference_mode
 using .Awale.Evaluation: HeuristicAgent, RandomAgent, ModelAgent, evaluate_agents, evaluate_agents_on_openings, generate_opening_suite
 using .Awale.MCTS: MCTSSearch
 using .Awale.ReplayBuffers: ReplayBuffer
@@ -598,9 +600,31 @@ function main(args::Vector{String}=Base.ARGS)
     evaluation_mcts = MCTSSearch(model[], C_PUCT, DIRICHLET_ALPHA, DIRICHLET_EPSILON, Dict{UInt64, Tuple{Float64, Int64}}())
     agent_random = RandomAgent()
 
+    # Generate reference state set for network drift
+    drift_rng = Random.MersenneTwister(42)
+    reference_states = GameState[]
+    for _ in 1:20
+        state = initial_state(GameConfig())
+        for _ in 1:50
+            is_terminal(state) && break
+            push!(reference_states, canonicalize(state))
+            actions = legal_actions(state)
+            isempty(actions) && break
+            state = transition(state, actions[rand(drift_rng, 1:length(actions))])
+        end
+    end
+    if length(reference_states) > 200
+        reference_states = reference_states[1:200]
+    end
+    println("  Network drift reference set: $(length(reference_states)) states")
+    drift_X = hcat([vec(encode_state(canonicalize(s))) for s in reference_states]...)
+
     if start_iter[] <= NUM_ITERATIONS
         for iter in start_iter[]:NUM_ITERATIONS
             println("\nIteration $iter / $NUM_ITERATIONS")
+
+            # Compute network drift before this iteration
+            before_logits, _ = with_inference_mode(() -> predict_raw(model[], drift_X), model[])
 
             loss = run_training_iteration(
                 training_mcts,
@@ -620,6 +644,16 @@ function main(args::Vector{String}=Base.ARGS)
             println("  Average loss: $(round(loss, digits=4))")
             println("  Replay buffer: $(length(replay_buffer)) samples")
             last_loss[] = Float64(loss)
+
+            # ── Network Drift ─────────────────────────────
+            after_logits, _ = with_inference_mode(() -> predict_raw(model[], drift_X), model[])
+            before_log_probs = Flux.logsoftmax(before_logits, dims=1)
+            after_probs_drift = softmax(after_logits, dims=1)
+            drift_kl = sum(exp.(before_log_probs) .* (before_log_probs .- log.(clamp.(after_probs_drift, 1.0f-10, 1.0f0))), dims=1)
+            avg_drift_kl = sum(drift_kl) / length(drift_kl)
+            println("  ── Network Drift ─────────────────────────────")
+            println("    Avg KL(network_before || network_after): $(round(avg_drift_kl, digits=4))")
+            println("  ────────────────────────────────────────────────")
 
             agent_model = ModelAgent(evaluation_mcts, SIMS_PER_EVAL)
             results = evaluate_agents(agent_model, agent_random, EVAL_GAMES, Awale.GameConfig(), rng; max_turns=MAX_TURNS)

@@ -32,7 +32,7 @@ struct MCTSNode
     prior::Float32
     visits::Ref{Int64}
     value_sum::Ref{Float32}
-    children::Dict{Int, MCTSNode}
+    children::Dict{Int,MCTSNode}
 end
 
 """
@@ -41,7 +41,7 @@ end
 Convenience constructor that initializes an unvisited MCTS node (zero visits, zero value sum)
 with an empty children dictionary.
 """
-function MCTSNode(s::GameState, prior::Float32=1.0f0)
+function MCTSNode(s::GameState, prior::Float32 = 1.0f0)
     return MCTSNode(s, prior, Ref(0), Ref(0.0f0), Dict())
 end
 
@@ -56,11 +56,11 @@ Search configuration holding the neural model and PUCT constant.
 - transposition_table::Dict — cache of (q_value, visits) by transposition key
 """
 struct MCTSSearch
-    model
+    model::Any
     c_puct::Float32
     dirichlet_alpha::Float32
     dirichlet_epsilon::Float32
-    transposition_table::Dict{UInt64, Tuple{Float64, Int64}}
+    transposition_table::Dict{UInt64,Tuple{Float64,Int64}}
 end
 
 """
@@ -71,7 +71,7 @@ Compute a hash key that includes past history, enabling transposition-aware sear
 function transposition_key(state::GameState)::UInt64
     bytes = serialize_state(state)
     for past_hash in sort!(collect(state.history_hashes))
-        for shift in 0:8:56
+        for shift = 0:8:56
             push!(bytes, UInt8((past_hash >> shift) & 0xff))
         end
     end
@@ -83,8 +83,15 @@ end
 
 Run MCTS and return the best action. Convenience wrapper around `search_with_stats`.
 """
-function search(mcts::MCTSSearch, root_state::GameState, num_sims::Int, rng=Random.default_rng(); add_root_noise::Bool=false)
-    action, _ = search_with_stats(mcts, root_state, num_sims, rng; add_root_noise=add_root_noise)
+function search(
+    mcts::MCTSSearch,
+    root_state::GameState,
+    num_sims::Int,
+    rng = Random.default_rng();
+    add_root_noise::Bool = false,
+)
+    action, _ =
+        search_with_stats(mcts, root_state, num_sims, rng; add_root_noise = add_root_noise)
     return action
 end
 
@@ -120,8 +127,8 @@ function search_with_stats(
     mcts::MCTSSearch,
     root_state::GameState,
     num_sims::Int,
-    rng=Random.default_rng();
-    add_root_noise::Bool=false,
+    rng = Random.default_rng();
+    add_root_noise::Bool = false,
 )
     empty!(mcts.transposition_table)
 
@@ -136,7 +143,9 @@ function search_with_stats(
 
     if add_root_noise
         dir_noise = generate_dirichlet(rng, length(actions), mcts.dirichlet_alpha)
-        root_priors = ((1.0f0 - mcts.dirichlet_epsilon) .* root_priors) .+ (mcts.dirichlet_epsilon .* dir_noise)
+        root_priors =
+            ((1.0f0 - mcts.dirichlet_epsilon) .* root_priors) .+
+            (mcts.dirichlet_epsilon .* dir_noise)
         root_priors ./= sum(root_priors)
     end
 
@@ -151,10 +160,10 @@ function search_with_stats(
             policy[action] = root_priors[idx]
         end
         best_action = actions[argmax(root_priors)]
-        return best_action, policy
+        return best_action, policy, maximum(policy)
     end
 
-    for _ in 1:num_sims
+    for _ = 1:num_sims
         leaf, path = select_and_expand(mcts, root)
         leaf_value = if is_terminal(leaf.state)
             reward(leaf.state)
@@ -172,7 +181,7 @@ function search_with_stats(
     end
 
     best_action = argmax(counts)
-    return best_action, counts
+    return best_action, counts, maximum(counts)
 end
 
 """
@@ -182,7 +191,7 @@ Sample an n-dimensional Dirichlet distribution with concentration parameter `alp
 """
 function generate_dirichlet(rng, n, alpha)
     samples = Float32[]
-    for _ in 1:n
+    for _ = 1:n
         push!(samples, sample_gamma(rng, alpha))
     end
     total = sum(samples)
@@ -280,9 +289,13 @@ function select_puct(mcts::MCTSSearch, node::MCTSNode)
 
         if haskey(mcts.transposition_table, child_key)
             cached_q, cached_visits = mcts.transposition_table[child_key]
-            score = -cached_q + mcts.c_puct * child.prior * sqrt(parent_visits) / (1 + cached_visits)
+            score =
+                -cached_q +
+                mcts.c_puct * child.prior * sqrt(parent_visits) / (1 + cached_visits)
         else
-            score = -q_value + mcts.c_puct * child.prior * sqrt(parent_visits) / (1 + child_visits)
+            score =
+                -q_value +
+                mcts.c_puct * child.prior * sqrt(parent_visits) / (1 + child_visits)
         end
 
         if score > best_score
@@ -303,7 +316,7 @@ Updates the transposition table with averaged Q and visit counts.
 """
 function backup(path::Vector{MCTSNode}, leaf_value::Float32, mcts::MCTSSearch)
     value = leaf_value
-    for idx in length(path):-1:1
+    for idx = length(path):-1:1
         node = path[idx]
         node.visits[] += 1
         node.value_sum[] += value

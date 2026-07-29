@@ -14,7 +14,8 @@ using ..ReplayBuffers: Experience, ReplayBuffer, push_experience!, sample_batch
 using Flux
 using Random
 
-export play_game, collect_selfplay_data, train_step, run_training_iteration, backfill_value_targets
+export play_game,
+    collect_selfplay_data, train_step, run_training_iteration, backfill_value_targets
 
 """
     temperature_for_turn(turns_played, temperature_moves) -> Float32
@@ -32,7 +33,11 @@ end
 Sample an action from the target policy. If temperature <= 0, picks argmax.
 Otherwise, samples proportionally from the normalized policy weights.
 """
-function sample_action_from_policy(pi_target::Vector{Float32}, rng, temperature::Float32)::Int
+function sample_action_from_policy(
+    pi_target::Vector{Float32},
+    rng,
+    temperature::Float32,
+)::Int
     if temperature <= 0.0f0
         return argmax(pi_target)
     end
@@ -62,11 +67,14 @@ end
 Backpropagate terminal rewards through a game trajectory with sign inversion.
 Returns a copy with corrected value targets (z_target) for each position.
 """
-function backfill_value_targets(samples::Vector{Tuple{GameState, Vector{Float32}, Float32}}, terminal_reward::Float32)
+function backfill_value_targets(
+    samples::Vector{Tuple{GameState,Vector{Float32},Float32}},
+    terminal_reward::Float32,
+)
     backfilled = copy(samples)
     current_value = -terminal_reward
 
-    for i in length(backfilled):-1:1
+    for i = length(backfilled):-1:1
         state, pi_target, _ = backfilled[i]
         backfilled[i] = (state, pi_target, current_value)
         current_value = -current_value
@@ -91,12 +99,15 @@ function collect_selfplay_data(
     max_turns::Int,
 )
     state = initial_state(config)
-    samples = Tuple{GameState, Vector{Float32}, Float32}[]
+    samples = Tuple{GameState,Vector{Float32},Float32}[]
+    root_confidences = Float32[]
     turns_played = 0
 
     while !is_terminal(state) && turns_played < max_turns
-        _, pi_target = search_with_stats(mcts, state, sims_per_move, rng; add_root_noise=true)
+        _, pi_target, root_conf =
+            search_with_stats(mcts, state, sims_per_move, rng; add_root_noise = true)
         push!(samples, (canonicalize(state), pi_target, 0.0f0))
+        push!(root_confidences, root_conf)
 
         temperature = temperature_for_turn(turns_played, temperature_moves)
         action = sample_action_from_policy(pi_target, rng, temperature)
@@ -104,7 +115,7 @@ function collect_selfplay_data(
         turns_played += 1
     end
 
-    return backfill_value_targets(samples, reward(state))
+    return backfill_value_targets(samples, reward(state)), root_confidences
 end
 
 """
@@ -120,7 +131,7 @@ function train_step(model, optimizer, states, target_pis, target_vs)
 
     function loss_fn(current_model)
         logits, values = predict_raw(current_model, X)
-        log_probs = Flux.logsoftmax(logits, dims=1)
+        log_probs = Flux.logsoftmax(logits, dims = 1)
         policy_loss = -sum(Y_pi .* log_probs) / size(X, 2)
         value_loss = Flux.mse(values, Y_v)
         return policy_loss, value_loss, log_probs
@@ -134,7 +145,7 @@ function train_step(model, optimizer, states, target_pis, target_vs)
 
     # Compute diagnostics on the updated model
     after_logits, after_values = predict_raw(model, X)
-    after_log_probs = Flux.logsoftmax(after_logits, dims=1)
+    after_log_probs = Flux.logsoftmax(after_logits, dims = 1)
     after_probs = exp.(after_log_probs)
     policy_loss = -sum(Y_pi .* after_log_probs) / size(X, 2)
     value_loss = Flux.mse(after_values, Y_v)
@@ -172,12 +183,14 @@ function train_step(model, optimizer, states, target_pis, target_vs)
     target_entropy = -sum(Y_pi .* log.(safe_target)) / size(X, 2)
 
     return (
-        loss=combined_loss,
-        policy_loss=policy_loss,
-        value_loss=value_loss,
-        grad_norm=grad_norm,
-        pred_entropy=pred_entropy,
-        target_entropy=target_entropy,
+        loss = combined_loss,
+        policy_loss = policy_loss,
+        value_loss = value_loss,
+        grad_norm = grad_norm,
+        pred_entropy = pred_entropy,
+        target_entropy = target_entropy,
+        Y_pi = Y_pi,
+        after_probs = after_probs,
     )
 end
 
@@ -208,18 +221,29 @@ function run_training_iteration(
 
     total_positions = 0
     total_game_length = 0
+    all_root_confidences = Float32[]
 
-    for game_idx in 1:n_games
+    for game_idx = 1:n_games
         print("\r  Self-play: $game_idx/$n_games")
         flush(stdout)
-        game_data = collect_selfplay_data(mcts, GameConfig(), sims, temperature_moves, rng; max_turns=max_turns)
+        game_data, root_confs = collect_selfplay_data(
+            mcts,
+            GameConfig(),
+            sims,
+            temperature_moves,
+            rng;
+            max_turns = max_turns,
+        )
         total_positions += length(game_data)
         total_game_length += length(game_data)
+        append!(all_root_confidences, root_confs)
         for (state, pi_target, value_target) in game_data
             push_experience!(replay_buffer, Experience(state, pi_target, value_target))
         end
     end
-    println("\r  Self-play: $n_games/$n_games | updates: $updates_per_iteration | replay mix: $(recent_pct)% recent / $(history_pct)% history")
+    println(
+        "\r  Self-play: $n_games/$n_games | updates: $updates_per_iteration | replay mix: $(recent_pct)% recent / $(history_pct)% history",
+    )
 
     losses = Float32[]
     policy_losses = Float32[]
@@ -229,13 +253,21 @@ function run_training_iteration(
     target_entropies = Float32[]
     total_samples = 0
 
-    for _ in 1:updates_per_iteration
+    # Per-position MCTS diagnostics accumulators
+    all_kl_per_position = Float32[]
+    all_top1 = Bool[]
+    all_top2 = Bool[]
+    all_top3 = Bool[]
+    all_l1_per_position = Float32[]
+    all_pos_entropy = Float32[]
+
+    for _ = 1:updates_per_iteration
         batch = sample_batch(
             replay_buffer,
             batch_size,
             rng;
-            recent_fraction=replay_recent_fraction,
-            recent_window=replay_recent_window,
+            recent_fraction = replay_recent_fraction,
+            recent_window = replay_recent_window,
         )
         isempty(batch) && break
 
@@ -251,6 +283,34 @@ function run_training_iteration(
         push!(grad_norms, step_result.grad_norm)
         push!(pred_entropies, step_result.pred_entropy)
         push!(target_entropies, step_result.target_entropy)
+
+        # Per-position MCTS diagnostics
+        Y_pi = step_result.Y_pi
+        after_probs = step_result.after_probs
+
+        # KL(target || network) per position
+        safe_target = clamp.(Y_pi, 1.0f-10, 1.0f0)
+        safe_pred = clamp.(after_probs, 1.0f-10, 1.0f0)
+        kl_per_pos = sum(Y_pi .* (log.(safe_target) .- log.(safe_pred)), dims = 1)
+        append!(all_kl_per_position, vec(kl_per_pos))
+
+        # Top-K agreement per position
+        target_order = sortperm(Y_pi, dims = 1, rev = true)
+        pred_order = sortperm(after_probs, dims = 1, rev = true)
+        target_top1 = vec(target_order[1, :])
+        for col = 1:size(Y_pi, 2)
+            push!(all_top1, target_top1[col] == pred_order[1, col])
+            push!(all_top2, target_top1[col] in pred_order[1:2, col])
+            push!(all_top3, target_top1[col] in pred_order[1:3, col])
+        end
+
+        # Policy L1 distance per position (scaled by 1/2 for [0,1] range)
+        l1_per_pos = sum(abs.(after_probs .- Y_pi), dims = 1) / 2
+        append!(all_l1_per_position, vec(l1_per_pos))
+
+        # Target policy entropy per position
+        pos_entropy = -sum(Y_pi .* log.(safe_target), dims = 1)
+        append!(all_pos_entropy, vec(pos_entropy))
     end
 
     avg_loss = isempty(losses) ? 0.0f0 : sum(losses) / length(losses)
@@ -258,7 +318,7 @@ function run_training_iteration(
     if !isempty(policy_losses)
         replay_capacity = replay_buffer.capacity
         replay_fill = length(replay_buffer)
-        replay_pct = round(replay_fill / replay_capacity * 100, digits=1)
+        replay_pct = round(replay_fill / replay_capacity * 100, digits = 1)
         avg_game_len = total_positions / max(1, n_games)
         avg_policy = sum(policy_losses) / length(policy_losses)
         avg_value = sum(value_losses) / length(value_losses)
@@ -277,6 +337,88 @@ function run_training_iteration(
         println("    Target policy entropy    : $(round(avg_target_ent, digits=4))")
         println("    Predicted policy entropy : $(round(avg_pred_ent, digits=4))")
         println("  ─────────────────────────────────────────────────")
+
+        # ── MCTS Diagnostics ──────────────────────────
+        if !isempty(all_kl_per_position)
+            sorted_kl = sort(all_kl_per_position)
+            n_kl = length(sorted_kl)
+            kl_mean = sum(all_kl_per_position) / length(all_kl_per_position)
+            kl_med = sorted_kl[div(n_kl, 2)+1]
+            kl_max = sorted_kl[end]
+            kl_p25 = sorted_kl[max(1, round(Int, 0.25 * n_kl))]
+            kl_p75 = sorted_kl[min(n_kl, round(Int, 0.75 * n_kl))]
+            kl_p95 = sorted_kl[min(n_kl, round(Int, 0.95 * n_kl))]
+
+            println("  ── MCTS Diagnostics ──────────────────────────")
+            println("    KL(target || network)")
+            println(
+                "      Mean: $(round(kl_mean, digits=4))   Median: $(round(kl_med, digits=4))   Max: $(round(kl_max, digits=4))",
+            )
+            println(
+                "      P25: $(round(kl_p25, digits=4))   P75: $(round(kl_p75, digits=4))   P95: $(round(kl_p95, digits=4))",
+            )
+
+            n_total = length(all_top1)
+            top1_pct = count(all_top1) / n_total * 100
+            top2_pct = count(all_top2) / n_total * 100
+            top3_pct = count(all_top3) / n_total * 100
+            println(
+                "    Top-K Agreement: Top-1: $(round(top1_pct, digits=1))%   Top-2: $(round(top2_pct, digits=1))%   Top-3: $(round(top3_pct, digits=1))%",
+            )
+
+            if !isempty(all_root_confidences)
+                sorted_rc = sort(all_root_confidences)
+                n_rc = length(sorted_rc)
+                rc_mean = sum(all_root_confidences) / length(all_root_confidences)
+                rc_med = sorted_rc[div(n_rc, 2)+1]
+                rc_min = sorted_rc[1]
+                rc_max = sorted_rc[end]
+                rc_p25 = sorted_rc[max(1, round(Int, 0.25 * n_rc))]
+                rc_p50 = sorted_rc[max(1, round(Int, 0.50 * n_rc))]
+                rc_p75 = sorted_rc[min(n_rc, round(Int, 0.75 * n_rc))]
+                rc_p95 = sorted_rc[min(n_rc, round(Int, 0.95 * n_rc))]
+                println("    Root confidence")
+                println(
+                    "      Mean: $(round(rc_mean, digits=4))   Median: $(round(rc_med, digits=4))",
+                )
+                println(
+                    "      P25: $(round(rc_p25, digits=4))   P50: $(round(rc_p50, digits=4))   P75: $(round(rc_p75, digits=4))   P95: $(round(rc_p95, digits=4))",
+                )
+                println(
+                    "      Min: $(round(rc_min, digits=4))   Max: $(round(rc_max, digits=4))",
+                )
+            end
+
+            sorted_l1 = sort(all_l1_per_position)
+            n_l1 = length(sorted_l1)
+            l1_mean = sum(all_l1_per_position) / length(all_l1_per_position)
+            l1_med = sorted_l1[div(n_l1, 2)+1]
+            l1_p25 = sorted_l1[max(1, round(Int, 0.25 * n_l1))]
+            l1_p75 = sorted_l1[min(n_l1, round(Int, 0.75 * n_l1))]
+            l1_p95 = sorted_l1[min(n_l1, round(Int, 0.95 * n_l1))]
+            println("    Policy distance (L1)")
+            println(
+                "      Mean: $(round(l1_mean, digits=4))   Median: $(round(l1_med, digits=4))   P25: $(round(l1_p25, digits=4))   P75: $(round(l1_p75, digits=4))   P95: $(round(l1_p95, digits=4))",
+            )
+
+            sorted_ent = sort(all_pos_entropy)
+            n_ent = length(sorted_ent)
+            ent_mean = sum(all_pos_entropy) / length(all_pos_entropy)
+            ent_med = sorted_ent[div(n_ent, 2)+1]
+            ent_min = sorted_ent[1]
+            ent_max = sorted_ent[end]
+            ent_p25 = sorted_ent[max(1, round(Int, 0.25 * n_ent))]
+            ent_p75 = sorted_ent[min(n_ent, round(Int, 0.75 * n_ent))]
+            ent_p95 = sorted_ent[min(n_ent, round(Int, 0.95 * n_ent))]
+            println("    Target policy entropy")
+            println(
+                "      Mean: $(round(ent_mean, digits=4))   Median: $(round(ent_med, digits=4))   Min: $(round(ent_min, digits=4))   Max: $(round(ent_max, digits=4))",
+            )
+            println(
+                "      P25: $(round(ent_p25, digits=4))   P75: $(round(ent_p75, digits=4))   P95: $(round(ent_p95, digits=4))",
+            )
+            println("  ────────────────────────────────────────────────")
+        end
     end
 
     return avg_loss
@@ -288,7 +430,14 @@ end
 Convenience wrapper for `collect_selfplay_data`.
 """
 function play_game(mcts, config, sims, temperature_moves, rng; max_turns::Int)
-    return collect_selfplay_data(mcts, config, sims, temperature_moves, rng; max_turns=max_turns)
+    return collect_selfplay_data(
+        mcts,
+        config,
+        sims,
+        temperature_moves,
+        rng;
+        max_turns = max_turns,
+    )[1]
 end
 
 end # module

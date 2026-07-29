@@ -11,7 +11,17 @@ using Flux
 using Serialization
 using ..State: GameState, canonicalize, encode_state
 
-export create_model, predict, predict_batch, predict_inference, predict_batch_inference, predict_raw, encode_state, save_model, load_model, save_public_model, load_public_model
+export create_model,
+    predict,
+    predict_batch,
+    predict_inference,
+    predict_batch_inference,
+    predict_raw,
+    encode_state,
+    save_model,
+    load_model,
+    save_public_model,
+    load_public_model
 
 """
     AwaleModel
@@ -87,7 +97,7 @@ function global_average_pool(x)
     for d in dims
         denom *= size(x, d)
     end
-    return sum(x; dims=dims) ./ denom
+    return sum(x; dims = dims) ./ denom
 end
 
 """
@@ -130,7 +140,11 @@ Throws `ArgumentError` if the activation name is not in `act_map`.
 function parse_activation(spec, act_map)
     activation_name = lowercase(String(get(spec, "activation", "identity")))
     activation = get(act_map, activation_name, nothing)
-    activation === nothing && throw(ArgumentError("Unsupported activation '$activation_name'. Available activations: $(join(sort!(collect(keys(act_map))), ", "))."))
+    activation === nothing && throw(
+        ArgumentError(
+            "Unsupported activation '$activation_name'. Available activations: $(join(sort!(collect(keys(act_map))), ", ")).",
+        ),
+    )
     return activation
 end
 
@@ -154,9 +168,16 @@ function as_int_tuple(value, field_name::AbstractString)
         return (Int(value),)
     end
 
-    value isa AbstractVector || value isa Tuple || throw(ArgumentError("Layer configuration field '$field_name' must be an integer or an integer tuple/array."))
+    value isa AbstractVector ||
+        value isa Tuple ||
+        throw(
+            ArgumentError(
+                "Layer configuration field '$field_name' must be an integer or an integer tuple/array.",
+            ),
+        )
     values = Tuple(Int.(collect(value)))
-    isempty(values) && throw(ArgumentError("Layer configuration field '$field_name' must not be empty."))
+    isempty(values) &&
+        throw(ArgumentError("Layer configuration field '$field_name' must not be empty."))
     return values
 end
 
@@ -172,7 +193,11 @@ function as_repeated_int_tuple(value, dims::Int, field_name::AbstractString)
     end
 
     values = as_int_tuple(value, field_name)
-    length(values) == dims || throw(ArgumentError("Layer configuration field '$field_name' must have exactly $dims entries."))
+    length(values) == dims || throw(
+        ArgumentError(
+            "Layer configuration field '$field_name' must have exactly $dims entries.",
+        ),
+    )
     return values
 end
 
@@ -203,9 +228,18 @@ function conv_layer(spec::AbstractDict, act_map)
     activation = parse_activation(spec, act_map)
     stride = as_repeated_int_tuple(get(spec, "stride", 1), length(kernel_tuple), "stride")
     pad = as_repeated_int_tuple(get(spec, "pad", 0), length(kernel_tuple), "pad")
-    dilation = as_repeated_int_tuple(get(spec, "dilation", 1), length(kernel_tuple), "dilation")
+    dilation =
+        as_repeated_int_tuple(get(spec, "dilation", 1), length(kernel_tuple), "dilation")
     groups = Int(get(spec, "groups", 1))
-    return Conv(kernel_tuple, Int(spec["in"]) => Int(spec["out"]), activation; stride=stride, pad=pad, dilation=dilation, groups=groups)
+    return Conv(
+        kernel_tuple,
+        Int(spec["in"]) => Int(spec["out"]),
+        activation;
+        stride = stride,
+        pad = pad,
+        dilation = dilation,
+        groups = groups,
+    )
 end
 
 """
@@ -237,9 +271,10 @@ function maxpool_layer(spec::AbstractDict)
     size = get(spec, "size", get(spec, "kernel", nothing))
     size === nothing && throw(ArgumentError("MaxPool layer is missing the 'size' field."))
     size_tuple = as_int_tuple(size, "size")
-    stride = as_repeated_int_tuple(get(spec, "stride", size_tuple), length(size_tuple), "stride")
+    stride =
+        as_repeated_int_tuple(get(spec, "stride", size_tuple), length(size_tuple), "stride")
     pad = as_repeated_int_tuple(get(spec, "pad", 0), length(size_tuple), "pad")
-    return MaxPool(size_tuple; stride=stride, pad=pad)
+    return MaxPool(size_tuple; stride = stride, pad = pad)
 end
 
 """
@@ -252,9 +287,10 @@ function meanpool_layer(spec::AbstractDict)
     size = get(spec, "size", get(spec, "kernel", nothing))
     size === nothing && throw(ArgumentError("MeanPool layer is missing the 'size' field."))
     size_tuple = as_int_tuple(size, "size")
-    stride = as_repeated_int_tuple(get(spec, "stride", size_tuple), length(size_tuple), "stride")
+    stride =
+        as_repeated_int_tuple(get(spec, "stride", size_tuple), length(size_tuple), "stride")
     pad = as_repeated_int_tuple(get(spec, "pad", 0), length(size_tuple), "pad")
-    return MeanPool(size_tuple; stride=stride, pad=pad)
+    return MeanPool(size_tuple; stride = stride, pad = pad)
 end
 
 """
@@ -278,7 +314,7 @@ function batchnorm_layer(spec::AbstractDict, act_map)
     activation = parse_activation(spec, act_map)
     affine = get(spec, "affine", true)
     track_stats = get(spec, "track_stats", true)
-    return BatchNorm(Int(size), activation; affine=affine, track_stats=track_stats)
+    return BatchNorm(Int(size), activation; affine = affine, track_stats = track_stats)
 end
 
 """
@@ -300,7 +336,8 @@ Build a single Flux layer from a TOML specification dictionary.
 Supports: Dense, Conv, Reshape, Flatten, MaxPool, MeanPool, GlobalAveragePool, BatchNorm, Dropout.
 """
 function build_layer(spec::AbstractDict, act_map)
-    haskey(spec, "type") || throw(ArgumentError("Layer specification is missing the 'type' field."))
+    haskey(spec, "type") ||
+        throw(ArgumentError("Layer specification is missing the 'type' field."))
     layer_type = normalize_type_name(spec["type"])
 
     if layer_type == "dense"
@@ -323,7 +360,11 @@ function build_layer(spec::AbstractDict, act_map)
         return dropout_layer(spec)
     end
 
-    throw(ArgumentError("Unsupported layer type '$layer_type'. Supported types: Dense, Conv, Reshape, Flatten, MaxPool, MeanPool, GlobalAveragePool, BatchNorm, Dropout."))
+    throw(
+        ArgumentError(
+            "Unsupported layer type '$layer_type'. Supported types: Dense, Conv, Reshape, Flatten, MaxPool, MeanPool, GlobalAveragePool, BatchNorm, Dropout.",
+        ),
+    )
 end
 
 """
@@ -333,8 +374,14 @@ Build a `Chain` of layers from an array of TOML layer specifications.
 Validates that the stack is a non-empty array.
 """
 function build_layer_stack(layer_specs, act_map, stack_name::AbstractString)
-    layer_specs isa AbstractVector || throw(ArgumentError("Model configuration layer stack '$stack_name' must be an array of layer specifications."))
-    isempty(layer_specs) && throw(ArgumentError("Model configuration layer stack '$stack_name' must not be empty."))
+    layer_specs isa AbstractVector || throw(
+        ArgumentError(
+            "Model configuration layer stack '$stack_name' must be an array of layer specifications.",
+        ),
+    )
+    isempty(layer_specs) && throw(
+        ArgumentError("Model configuration layer stack '$stack_name' must not be empty."),
+    )
     return Chain([build_layer(layer, act_map) for layer in layer_specs]...)
 end
 
@@ -345,11 +392,15 @@ Construct an `AwaleModel` from a parsed TOML configuration section.
 Expects `shared`, `policy`, and `value` layer stacks.
 """
 function build_model(model_cfg)
-    haskey(model_cfg, "layers") || throw(ArgumentError("Model configuration is missing the 'layers' section."))
+    haskey(model_cfg, "layers") ||
+        throw(ArgumentError("Model configuration is missing the 'layers' section."))
     layers = model_cfg["layers"]
-    haskey(layers, "shared") || throw(ArgumentError("Model configuration is missing the 'shared' layer stack."))
-    haskey(layers, "policy") || throw(ArgumentError("Model configuration is missing the 'policy' layer stack."))
-    haskey(layers, "value") || throw(ArgumentError("Model configuration is missing the 'value' layer stack."))
+    haskey(layers, "shared") ||
+        throw(ArgumentError("Model configuration is missing the 'shared' layer stack."))
+    haskey(layers, "policy") ||
+        throw(ArgumentError("Model configuration is missing the 'policy' layer stack."))
+    haskey(layers, "value") ||
+        throw(ArgumentError("Model configuration is missing the 'value' layer stack."))
 
     act_map = activation_map()
     shared_layers = build_layer_stack(layers["shared"], act_map, "shared")
@@ -370,7 +421,11 @@ function select_model_config(model_cfg, architecture::String)
     if haskey(model_cfg, "variants")
         variants = model_cfg["variants"]
         variant_cfg = get(variants, architecture, nothing)
-        variant_cfg === nothing && throw(ArgumentError("Unsupported model architecture '$architecture'. Available variants: $(join(sort!(collect(keys(variants))), ", "))."))
+        variant_cfg === nothing && throw(
+            ArgumentError(
+                "Unsupported model architecture '$architecture'. Available variants: $(join(sort!(collect(keys(variants))), ", ")).",
+            ),
+        )
         return variant_cfg
     end
 
@@ -383,7 +438,7 @@ end
 Load model configuration from TOML and build the neural network.
 Reads architecture selection and variant config from the file.
 """
-function create_model(config_path::String=joinpath(@__DIR__, "config.toml"))
+function create_model(config_path::String = joinpath(@__DIR__, "config.toml"))
     config = TOML.parsefile(config_path)
     model_cfg = config["model"]
     architecture = model_architecture(model_cfg)
@@ -498,7 +553,7 @@ function atomic_write(write_fn::Function, path::AbstractString)
         write_fn(io)
         flush(io)
         close(io)
-        mv(temp_path, path; force=true)
+        mv(temp_path, path; force = true)
         success = true
     catch
         try
@@ -508,7 +563,7 @@ function atomic_write(write_fn::Function, path::AbstractString)
         end
     finally
         if !success && isfile(temp_path)
-            rm(temp_path; force=true)
+            rm(temp_path; force = true)
         end
     end
     return path
@@ -573,8 +628,12 @@ By default, the model structure is recreated from a sibling `model_config.toml`
 next to the public checkpoint. An explicit `config_path` still overrides that
 inferred location.
 """
-function load_public_model(path::AbstractString, config_path::AbstractString=public_model_config_path(path))::AwaleModel
-    filesize(path) % sizeof(Float32) == 0 || throw(ArgumentError("Invalid public model payload size: $path"))
+function load_public_model(
+    path::AbstractString,
+    config_path::AbstractString = public_model_config_path(path),
+)::AwaleModel
+    filesize(path) % sizeof(Float32) == 0 ||
+        throw(ArgumentError("Invalid public model payload size: $path"))
     weights = Vector{Float32}(undef, filesize(path) ÷ sizeof(Float32))
     open(path, "r") do io
         read!(io, weights)

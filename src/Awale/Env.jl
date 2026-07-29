@@ -36,10 +36,10 @@ function side_seed_totals(s::GameState)::Tuple{Int,Int}
     p1_total = Int(s.captured[1])
     p2_total = Int(s.captured[2])
 
-    for i in 1:6
+    for i = 1:6
         p1_total += Int(s.board[i])
     end
-    for i in 7:12
+    for i = 7:12
         p2_total += Int(s.board[i])
     end
 
@@ -105,13 +105,13 @@ by `legal_actions` and `transition` for efficient what-if evaluation.
 function simulate_move(s::GameState, action::Int)
     idx = local_to_global(action, s)
     seeds = s.board[idx]
-    
+
     # Use a local mutable array for calculation to minimize allocations in the hot-path
     board_vec = zeros(UInt8, 12)
-    for i in 1:12
+    for i = 1:12
         board_vec[i] = s.board[i]
     end
-    
+
     board_vec[idx] = 0
     pos = idx
     while seeds > 0
@@ -143,7 +143,7 @@ Returns an empty vector if the player has no seeds.
 """
 function legal_actions(s::GameState)::Vector{Int}
     slice = (s.to_move == 1) ? s.board[1:6] : s.board[7:12]
-    base_actions = [i for i in 1:6 if slice[i] > 0]
+    base_actions = [i for i = 1:6 if slice[i] > 0]
     if isempty(base_actions)
         return Int[]
     end
@@ -189,7 +189,11 @@ Updates the history hash for repetition detection.
 function transition(s::GameState, action::Int)::GameState
     actions = legal_actions(s)
     if !(action in actions)
-        throw(ErrorException("IllegalAction: action $action is not legal under current config"))
+        throw(
+            ErrorException(
+                "IllegalAction: action $action is not legal under current config",
+            ),
+        )
     end
     board_vec, captured_this_turn = simulate_move(s, action)
     current_player = s.to_move
@@ -202,13 +206,20 @@ function transition(s::GameState, action::Int)::GameState
     end
     new_board = board_vec # SVector{12,UInt8}(board_vec) is implicitly converted if types match
     new_to_move = Int8(opp_player)
-    
+
     # Construct new state and update history to include the hash of the state we just left
-    temp_s = GameState(new_board, new_to_move, new_captured, UInt64(0), s.config, s.history_hashes)
+    temp_s = GameState(
+        new_board,
+        new_to_move,
+        new_captured,
+        UInt64(0),
+        s.config,
+        s.history_hashes,
+    )
     h = hash_state(canonicalize(temp_s))
     new_history = copy(s.history_hashes)
     push!(new_history, s.history_hash)
-    
+
     return GameState(new_board, new_to_move, new_captured, h, s.config, new_history)
 end
 
