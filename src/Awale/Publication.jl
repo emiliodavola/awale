@@ -35,7 +35,7 @@ const ARTIFACT_SUBDIR = "artifacts"
 const MANIFEST_FILE = "manifest.toml"
 const RELEASE_SUMMARY_FILE = "release_summary.toml"
 const MODEL_CARD_FILE = "README.md"
-const MODEL_CARD_GENERATOR_VERSION = 1
+const MODEL_CARD_GENERATOR_VERSION = 2
 const PUBLIC_MODEL_FILE_EXT = ".f32"
 const DEFAULT_ROOT_DIR = abspath(joinpath(@__DIR__, "..", ".."))
 
@@ -566,6 +566,14 @@ function release_model_card(summary::Dict{String, Any}, artifact_specs::Dict{Str
     for bundle_relpath in sort!(collect(keys(artifact_specs)))
         println(io, "- `$(bundle_relpath)`")
     end
+
+    println(io)
+    println(io, "## Code")
+    println(io, "- Training scripts")
+    println(io, "- Inference code")
+    println(io, "- Evaluation scripts")
+    println(io, "- Configuration files")
+    println(io, "- <https://github.com/emiliodavola/awale>")
 
     return String(take!(io))
 end
