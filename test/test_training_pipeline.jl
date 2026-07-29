@@ -394,7 +394,7 @@ end
         replay_buffer = Awale.ReplayBuffers.ReplayBuffer(256)
         mcts = Awale.MCTSSearch(model, 1.5f0, 0.3f0, 0.25f0, Dict{UInt64, Tuple{Float64, Int64}}())
 
-        loss = Awale.run_training_iteration(
+        tr, cal = Awale.run_training_iteration(
             mcts,
             optimizer,
             model,
@@ -410,7 +410,7 @@ end
             max_turns=1000,
         )
 
-        @test isfinite(loss)
+        @test isfinite(tr)
         @test length(replay_buffer) > 0
 
         @test_throws ArgumentError Awale.run_training_iteration(
@@ -1044,5 +1044,44 @@ end
             @test !occursin("iter_200", output)
         end
         arena_module.CHECKPOINT_DIR = original_checkpoint_dir
+    end
+
+    @testset "TrainingResult MCTS aggregate fields" begin
+        @testset "no-data path fields are zero" begin
+            r = Awale.TrainingResult(0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0, 0.0,
+                0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0f0)
+            @test r.kl_mean === 0.0f0
+            @test r.kl_median === 0.0f0
+            @test r.top1_pct === 0.0f0
+            @test r.top2_pct === 0.0f0
+            @test r.top3_pct === 0.0f0
+            @test r.root_conf_mean === 0.0f0
+            @test r.l1_mean === 0.0f0
+            @test isfinite(r)
+        end
+
+        @testset "populated aggregates from training iteration" begin
+            rng = MersenneTwister(11)
+            model = Awale.create_model()
+            optimizer = Flux.setup(Flux.Adam(1.0f-3), model)
+            replay_buffer = Awale.ReplayBuffers.ReplayBuffer(256)
+            mcts = Awale.MCTSSearch(model, 1.5f0, 0.3f0, 0.25f0, Dict{UInt64, Tuple{Float64, Int64}}())
+
+            result, _ = Awale.run_training_iteration(
+                mcts, optimizer, model, replay_buffer;
+                n_games=1, sims=1, batch_size=8, updates_per_iteration=2,
+                replay_recent_fraction=0.5, replay_recent_window=32,
+                temperature_moves=2, rng=rng, max_turns=1000,
+            )
+
+            @test isfinite(result)
+            @test result.kl_mean >= 0.0f0
+            @test result.kl_median >= 0.0f0
+            @test result.top1_pct >= 0.0f0
+            @test result.top1_pct <= 100.0f0
+            @test result.top2_pct >= result.top1_pct
+            @test result.top3_pct >= result.top2_pct
+            @test result.l1_mean >= 0.0f0
+        end
     end
 end
