@@ -62,6 +62,30 @@ The final run state is represented by `model_final.bin`, not by forcing a number
 - `training.bootstrap_rng_seed` controls the main training RNG bootstrap.
 - `training.max_turns` is the shared turn cap used by self-play, evaluation, arena, and interactive play paths.
 
+## Training metrics tracking
+
+Per-iteration metrics are collected by `src/Awale/Metrics.jl` (registered via `Awale.jl`) and injected into `train.jl`'s main loop.
+
+| Metric | Mechanism | Persistence |
+|--------|-----------|-------------|
+| Parameter update norm | `Flux.destructure` before/after `run_training_iteration` | CSV + diagnostics |
+| Elo rating (candidate vs best) | `EloTracker` struct; candidate updates each iter, best freezes until promotion | CSV column + printed |
+| Promotion tracking | `ProgressTracker` (gaps, streaks, total), `PromotionRecord` per event | `promotion_history.toml` |
+| Learning curve | 15-column CSV row per iteration | `learning_curve_<arch>_<release_id>.csv` |
+
+### Resume behavior
+
+- CSV appends (no duplicate header rewritten on resume).
+- `promotion_history.toml` is reloaded; `ProgressTracker` state restored.
+- `EloTracker` resets to (1500, 1500) — weights-only contract.
+
+### File locations
+
+| File | Path (relative to checkpoint namespace) |
+|------|----------------------------------------|
+| Learning curve CSV | `log/learning_curve_<arch>_<release_id>.csv` |
+| Promotion history | `promotion_history.toml` (same dir as `training_state.toml`) |
+
 ## Determinism boundary
 
 - Fresh training runs initialize the model in `train.jl` from `training.initial_model_seed`, so the starting weights are reproducible for any fixed configured seed.

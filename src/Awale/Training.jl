@@ -15,8 +15,27 @@ using Flux
 using Random
 using Statistics
 
-export play_game,
-    collect_selfplay_data, train_step, run_training_iteration, backfill_value_targets
+export play_game, collect_selfplay_data, train_step, run_training_iteration, backfill_value_targets, TrainingResult
+
+"""
+    TrainingResult
+
+Return type for `run_training_iteration`. Contains the average combined loss
+and per-iteration diagnostic statistics (policy/value loss, gradient norm,
+entropy, replay coverage, game length).
+"""
+struct TrainingResult
+    avg_loss::Float32
+    avg_policy_loss::Float32
+    avg_value_loss::Float32
+    avg_grad_norm::Float32
+    avg_pred_entropy::Float32
+    avg_target_entropy::Float32
+    avg_game_len::Float64
+    replay_pct::Float64
+end
+
+Base.isfinite(r::TrainingResult) = isfinite(r.avg_loss)
 
 """
     temperature_for_turn(turns_played, temperature_moves) -> Float32
@@ -319,7 +338,8 @@ function run_training_iteration(
     if !isempty(policy_losses)
         replay_capacity = replay_buffer.capacity
         replay_fill = length(replay_buffer)
-        replay_pct = round(replay_fill / replay_capacity * 100, digits = 1)
+        # Replay coverage = fill percentage of the circular buffer, NOT samples_consumed / capacity
+        replay_pct = round(replay_fill / replay_capacity * 100, digits=1)
         avg_game_len = total_positions / max(1, n_games)
         avg_policy = sum(policy_losses) / length(policy_losses)
         avg_value = sum(value_losses) / length(value_losses)
@@ -405,7 +425,14 @@ function run_training_iteration(
         end
     end
 
-    return avg_loss
+    if !isempty(policy_losses)
+        return TrainingResult(
+            avg_loss, avg_policy, avg_value, avg_grad, avg_pred_ent, avg_target_ent,
+            avg_game_len, Float64(replay_pct),
+        )
+    end
+
+    return TrainingResult(avg_loss, 0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0, 0.0)
 end
 
 """
