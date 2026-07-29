@@ -13,7 +13,10 @@ using .Awale.Publication: release_summary_path, release_id_slug, release_timesta
 using .Awale.Utils: architecture_slug, architecture_scoped_path, architecture_scoped_candidates, first_existing_path
 using Random
 using TOML
-import Dates: now as date_now, format as date_format
+using JSON
+using SHA
+using Statistics
+import Dates: now as date_now, format as date_format, UTC
 
 config = TOML.parsefile(joinpath(ROOT_DIR, "config.toml"))
 training_cfg = config["training"]
@@ -549,6 +552,11 @@ function save_promotion_history(pt::Awale.Metrics.ProgressTracker, path::String)
                 println(io, "random_anchor_wr = $(rec.random_anchor_wr)")
             end
             println(io, "promotion_score = $(rec.promotion_score)")
+            println(io, "gap_since_last = $(rec.gap_since_last)")
+            println(io, "total_promotions_at_event = $(rec.total_promotions_at_event)")
+            println(io, "elo_candidate = $(rec.elo_candidate)")
+            println(io, "elo_best = $(rec.elo_best)")
+            println(io, "timestamp = \"$(rec.timestamp)\"")
         end
     end
 end
@@ -587,6 +595,11 @@ function load_promotion_history!(pt::Awale.Metrics.ProgressTracker, path::String
             Int(get(p, "draws", 0)),
             get(p, "random_anchor_wr", nothing),
             Float64(get(p, "promotion_score", 0.0)),
+            Int(get(p, "gap_since_last", 0)),
+            Int(get(p, "total_promotions_at_event", 0)),
+            Float64(get(p, "elo_candidate", 1500.0)),
+            Float64(get(p, "elo_best", 1500.0)),
+            String(get(p, "timestamp", "")),
         )
         push!(pt.promotions, promo)
     end
@@ -695,15 +708,42 @@ function main(args::Vector{String}=Base.ARGS)
     promotion_history_file = joinpath(checkpoint_namespace_dir(), "promotion_history.toml")
     learning_curve_file = joinpath(training_log_dir(), "learning_curve_$(architecture_slug(model_architecture_name()))_$(release_id).csv")
 
+    # ── JSONL metrics setup ──────────────────────────────────
+    METRIC_VERSION = "1.0.0"
+    GIT_COMMIT = commit_sha
+    ARCHITECTURE = architecture_slug(model_architecture_name())
+    config_bytes = read(joinpath(ROOT_DIR, "config.toml"))
+    CONFIG_HASH = bytes2hex(sha256(config_bytes))
+    jsonl_file = joinpath(training_log_dir(), "metrics_$(architecture_slug(model_architecture_name()))_$(release_id).jsonl")
+
     # CSV: append on resume, write header only for new files
     csv_fresh = !isfile(learning_curve_file) || filesize(learning_curve_file) == 0
     csv_io = open(learning_curve_file, "a")
+
+    # JSONL: append mode, no header
+    jsonl_io = open(jsonl_file, "a")
 
     # Promotion history: restore tracked state on resume
     if isfile(promotion_history_file)
         println("Loading promotion history from: $promotion_history_file")
         load_promotion_history!(progress_tracker, promotion_history_file)
     end
+
+    # ── Δ-metrics & moving average state ─────────────────────
+    prev_kl_mean = NaN
+    prev_policy_dist = NaN
+    prev_top1_pct = NaN
+    prev_drift_kl = NaN
+    prev_grad_norm = NaN
+    prev_param_update = NaN
+    ma_buf_loss = Float32[]
+    ma_buf_policy_loss = Float32[]
+    ma_buf_value_loss = Float32[]
+    ma_buf_kl = Float32[]
+    ma_buf_top1 = Float32[]
+    ma_buf_drift = Float32[]
+    ma_buf_rating = Float32[]
+    ma_buf_entropy = Float32[]
 
     try
     if csv_fresh
@@ -713,12 +753,13 @@ function main(args::Vector{String}=Base.ARGS)
     if start_iter[] <= NUM_ITERATIONS
         for iter in start_iter[]:NUM_ITERATIONS
             println("\nIteration $iter / $NUM_ITERATIONS")
+            iter_start_ns = time_ns()
 
             # Compute network drift before this iteration
             before_logits, _ = with_inference_mode(() -> predict_raw(model[], drift_X), model[])
 
             old_params_vec, _ = Flux.destructure(model[])
-            training_result = run_training_iteration(
+            training_result, calib_data = run_training_iteration(
                 training_mcts,
                 optimizer,
                 model[],
@@ -733,6 +774,7 @@ function main(args::Vector{String}=Base.ARGS)
                 rng=rng,
                 max_turns=MAX_TURNS,
             )
+            iter_duration_s = (time_ns() - iter_start_ns) / 1e9
             new_params_vec, _ = Flux.destructure(model[])
             param_update_norm = sqrt(sum((new_params_vec .- old_params_vec) .^ 2))
             loss = training_result.avg_loss
@@ -750,6 +792,13 @@ function main(args::Vector{String}=Base.ARGS)
             println("  ── Network Drift ─────────────────────────────")
             println("    Avg KL(network_before || network_after): $(round(avg_drift_kl, digits=4))")
             println("  ────────────────────────────────────────────────")
+
+            # Value calibration from last training batch
+            value_cal = if !isempty(calib_data.v_pred)
+                Awale.Metrics.compute_value_calibration(vec(calib_data.v_pred), vec(calib_data.v_target))
+            else
+                (mae=NaN, pearson_r=NaN, spearman_rho=NaN)
+            end
 
             agent_model = ModelAgent(evaluation_mcts, SIMS_PER_EVAL)
             results = evaluate_agents(agent_model, agent_random, EVAL_GAMES, Awale.GameConfig(), rng; max_turns=MAX_TURNS)
@@ -780,6 +829,18 @@ function main(args::Vector{String}=Base.ARGS)
                 Awale.Metrics.update_elo!(elo_tracker, br.wins, br.losses, br.draws, iter)
             end
 
+            # ── Elo expected / actual / delta / upset ───────────
+            elo_expected = 1.0 / (1.0 + 10.0 ^ ((elo_tracker.best_rating - elo_tracker.candidate_rating) / 400.0))
+            if selection.current_best_results !== nothing
+                br = selection.current_best_results
+                total_s = br.wins + br.losses + br.draws
+                elo_actual = (br.wins + 0.5 * br.draws) / max(1, total_s)
+            else
+                elo_actual = NaN
+            end
+            elo_delta = elo_tracker.k * (elo_actual - elo_expected)
+            elo_upset = abs(elo_actual - elo_expected)
+
             promoted_flag = false
             if maybe_promote_best!(model[], best_selection_score, selection)
                 println("  ✅ New best model saved to: $(training_best_checkpoint_path())")
@@ -800,6 +861,11 @@ function main(args::Vector{String}=Base.ARGS)
                     selection.current_best_results === nothing ? 0 : selection.current_best_results.draws,
                     random_wr,
                     selection.promotion_score,
+                    iter - progress_tracker.last_best_iter,
+                    progress_tracker.total_promotions + 1,
+                    elo_tracker.candidate_rating,
+                    elo_tracker.best_rating,
+                    date_format(date_now(UTC), "yyyy-mm-ddTHH:MM:SSZ"),
                 )
                 Awale.Metrics.record_promotion!(progress_tracker, iter, promo_record)
                 Awale.Metrics.promote_elo!(elo_tracker)
@@ -820,6 +886,95 @@ function main(args::Vector{String}=Base.ARGS)
                 snapshot_path = training_snapshot_path(iter)
                 save_model(model[], snapshot_path)
                 println("  📦 Snapshot saved to: $snapshot_path")
+            end
+
+            # ── Δ-metrics ──────────────────────────────────────
+            delta_kl = isfinite(prev_kl_mean) ? abs(training_result.kl_mean - prev_kl_mean) : NaN
+            delta_policy_dist = isfinite(prev_policy_dist) ? abs(training_result.l1_mean - prev_policy_dist) : NaN
+            delta_top1 = isfinite(prev_top1_pct) ? abs(training_result.top1_pct - prev_top1_pct) : NaN
+            delta_drift = isfinite(prev_drift_kl) ? abs(avg_drift_kl - prev_drift_kl) : NaN
+            delta_grad_norm = isfinite(prev_grad_norm) ? abs(training_result.avg_grad_norm - prev_grad_norm) : NaN
+            delta_param_update = isfinite(prev_param_update) ? abs(param_update_norm - prev_param_update) : NaN
+            prev_kl_mean = training_result.kl_mean
+            prev_policy_dist = training_result.l1_mean
+            prev_top1_pct = training_result.top1_pct
+            prev_drift_kl = avg_drift_kl
+            prev_grad_norm = training_result.avg_grad_norm
+            prev_param_update = param_update_norm
+
+            # ── Update moving average buffers ──────────────────
+            push!(ma_buf_loss, training_result.avg_loss)
+            push!(ma_buf_policy_loss, training_result.avg_policy_loss)
+            push!(ma_buf_value_loss, training_result.avg_value_loss)
+            push!(ma_buf_kl, training_result.kl_mean)
+            push!(ma_buf_top1, training_result.top1_pct)
+            push!(ma_buf_drift, avg_drift_kl)
+            push!(ma_buf_rating, Float32(elo_tracker.candidate_rating))
+            push!(ma_buf_entropy, training_result.avg_pred_entropy)
+
+            ma_win(buf, n) = length(buf) >= n ? sum(buf[end-n+1:end]) / n : NaN
+            ma_loss_5 = ma_win(ma_buf_loss, 5)
+            ma_loss_10 = ma_win(ma_buf_loss, 10)
+            ma_loss_20 = ma_win(ma_buf_loss, 20)
+            ma_policy_loss_5 = ma_win(ma_buf_policy_loss, 5)
+            ma_value_loss_5 = ma_win(ma_buf_value_loss, 5)
+            ma_kl_5 = ma_win(ma_buf_kl, 5)
+            ma_kl_10 = ma_win(ma_buf_kl, 10)
+            ma_kl_20 = ma_win(ma_buf_kl, 20)
+            ma_top1_5 = ma_win(ma_buf_top1, 5)
+            ma_top1_10 = ma_win(ma_buf_top1, 10)
+            ma_top1_20 = ma_win(ma_buf_top1, 20)
+            ma_drift_5 = ma_win(ma_buf_drift, 5)
+            ma_drift_10 = ma_win(ma_buf_drift, 10)
+            ma_drift_20 = ma_win(ma_buf_drift, 20)
+            ma_rating_5 = ma_win(ma_buf_rating, 5)
+            ma_rating_10 = ma_win(ma_buf_rating, 10)
+            ma_rating_20 = ma_win(ma_buf_rating, 20)
+            ma_entropy_5 = ma_win(ma_buf_entropy, 5)
+            ma_entropy_10 = ma_win(ma_buf_entropy, 10)
+            ma_entropy_20 = ma_win(ma_buf_entropy, 20)
+
+            # ── Convergence stability (passive) ────────────────
+            window_size = min(20, length(ma_buf_kl))
+            if window_size >= 5
+                kl_window = ma_buf_kl[end-window_size+1:end]
+                drift_window = ma_buf_drift[end-window_size+1:end]
+                top1_window = ma_buf_top1[end-window_size+1:end]
+                param_window = ma_buf_policy_loss[end-window_size+1:end]
+                kl_stable = var(kl_window) < 0.001f0 ? "STALLED" : "ACTIVE"
+                drift_stable = var(drift_window) < 0.0001f0 ? "STALLED" : "ACTIVE"
+                top1_stable = var(top1_window) < 1.0f0 ? "STALLED" : "ACTIVE"
+                param_stable = var(param_window) < 0.01f0 ? "STALLED" : "ACTIVE"
+                stability_str = " KL:$kl_stable Drift:$drift_stable Top1:$top1_stable Param:$param_stable"
+            else
+                stability_str = " KL:BOOTSTRAP Drift:BOOTSTRAP Top1:BOOTSTRAP Param:BOOTSTRAP"
+            end
+
+            # ── Health dashboard ──────────────────────────────
+            net_health = delta_kl > 0.01f0 || param_update_norm > 0.01f0 ? "ACTIVE" : "STALLED"
+            srch_health = training_result.top1_pct < 80.0f0 ? "HIGH" : "LOW"
+            drift_health = avg_drift_kl < 0.01f0 ? "LOW" : (avg_drift_kl < 0.05f0 ? "MEDIUM" : "HIGH")
+            promo_since = progress_tracker.last_best_iter > 0 ? iter - progress_tracker.last_best_iter : iter
+            cal_health = if isfinite(value_cal.mae)
+                value_cal.mae < 0.5f0 ? "OK" : "HIGH"
+            else
+                "N/A"
+            end
+            health_line = "Net:$net_health Srch:$srch_health Drift:$drift_health Promo:$promo_since/$(progress_tracker.total_promotions) Rply:$(training_result.replay_pct)% ValCal:$cal_health"
+            println("  ── Health ─────────────────────────────────────")
+            println("    $health_line$stability_str")
+            println("  ────────────────────────────────────────────────")
+
+            # ── Warnings ───────────────────────────────────────
+            if training_result.top1_pct > 95.0f0
+                println("  ⚠ Top-1 agreement $(round(training_result.top1_pct, digits=1))% — search may no longer improve policy")
+            end
+            if avg_drift_kl < 1.0f-6
+                println("  ⚠ Network drift near zero — training may have converged")
+            end
+            rolling_mean = ma_win(ma_buf_policy_loss, 5)
+            if isfinite(rolling_mean) && rolling_mean > 0.0f0 && param_update_norm > 5.0f0 * rolling_mean
+                println("  ⚠ Parameter update unusually large — possible instability")
             end
 
             # Write learning curve CSV row
@@ -843,6 +998,91 @@ function main(args::Vector{String}=Base.ARGS)
             )
             flush(csv_io)
 
+            # ── Assemble JSONL entry ───────────────────────────
+            mcts_root_q = length(calib_data.v_pred) > 0 ? mean(vec(calib_data.v_pred)) : NaN
+            jsonl_dict = Dict{String, Any}(
+                # Versioning
+                "metric_version" => METRIC_VERSION,
+                "git_commit" => GIT_COMMIT,
+                "architecture" => ARCHITECTURE,
+                "config_hash" => CONFIG_HASH,
+                # Core
+                "iter" => iter,
+                "timestamp" => date_format(date_now(UTC), "yyyy-mm-ddTHH:MM:SSZ"),
+                "duration_s" => round(iter_duration_s, digits=2),
+                # Existing CSV fields
+                "avg_loss" => Float64(round(training_result.avg_loss, digits=6)),
+                "policy_loss" => Float64(round(training_result.avg_policy_loss, digits=6)),
+                "value_loss" => Float64(round(training_result.avg_value_loss, digits=6)),
+                "grad_norm" => Float64(round(training_result.avg_grad_norm, digits=6)),
+                "pred_entropy" => Float64(round(training_result.avg_pred_entropy, digits=6)),
+                "target_entropy" => Float64(round(training_result.avg_target_entropy, digits=6)),
+                "param_update_norm" => Float64(round(param_update_norm, digits=6)),
+                "replay_fill_pct" => Float64(training_result.replay_pct),
+                "avg_game_len" => Float64(round(training_result.avg_game_len, digits=2)),
+                "baseline_wr" => Float64(round(win_rate, digits=2)),
+                "candidate_vs_best_wr" => selection.current_best_rate,
+                "promoted" => promoted_flag,
+                "elo_candidate" => Float64(round(elo_tracker.candidate_rating, digits=2)),
+                "elo_best" => Float64(round(elo_tracker.best_rating, digits=2)),
+                # MCTS aggregates
+                "mcts_kl_mean" => Float64(round(training_result.kl_mean, digits=6)),
+                "mcts_kl_median" => Float64(round(training_result.kl_median, digits=6)),
+                "mcts_top1_pct" => Float64(round(training_result.top1_pct, digits=2)),
+                "mcts_top2_pct" => Float64(round(training_result.top2_pct, digits=2)),
+                "mcts_top3_pct" => Float64(round(training_result.top3_pct, digits=2)),
+                "mcts_root_conf_mean" => Float64(round(training_result.root_conf_mean, digits=6)),
+                "mcts_l1_mean" => Float64(round(training_result.l1_mean, digits=6)),
+                # Drift & root Q
+                "drift_kl" => Float64(round(avg_drift_kl, digits=6)),
+                "mcts_root_q" => Float64(round(mcts_root_q, digits=6)),
+                # Value calibration
+                "value_cal_mae" => Float64(round(value_cal.mae, digits=6)),
+                "value_cal_pearson" => Float64(round(value_cal.pearson_r, digits=6)),
+                "value_cal_spearman" => Float64(round(value_cal.spearman_rho, digits=6)),
+                # Elo
+                "elo_expected" => Float64(round(elo_expected, digits=4)),
+                "elo_actual" => Float64(round(elo_actual, digits=4)),
+                "elo_delta" => Float64(round(elo_delta, digits=4)),
+                "elo_upset" => Float64(round(elo_upset, digits=4)),
+                # Δ-metrics
+                "delta_kl" => Float64(round(delta_kl, digits=6)),
+                "delta_policy_dist" => Float64(round(delta_policy_dist, digits=6)),
+                "delta_top1" => Float64(round(delta_top1, digits=6)),
+                "delta_drift" => Float64(round(delta_drift, digits=6)),
+                "delta_grad_norm" => Float64(round(delta_grad_norm, digits=6)),
+                "delta_param_update" => Float64(round(delta_param_update, digits=6)),
+                # Moving averages
+                "ma_loss_5" => Float64(round(ma_loss_5, digits=6)),
+                "ma_loss_10" => Float64(round(ma_loss_10, digits=6)),
+                "ma_loss_20" => Float64(round(ma_loss_20, digits=6)),
+                "ma_policy_loss_5" => Float64(round(ma_policy_loss_5, digits=6)),
+                "ma_value_loss_5" => Float64(round(ma_value_loss_5, digits=6)),
+                "ma_kl_5" => Float64(round(ma_kl_5, digits=6)),
+                "ma_kl_10" => Float64(round(ma_kl_10, digits=6)),
+                "ma_kl_20" => Float64(round(ma_kl_20, digits=6)),
+                "ma_top1_5" => Float64(round(ma_top1_5, digits=6)),
+                "ma_top1_10" => Float64(round(ma_top1_10, digits=6)),
+                "ma_top1_20" => Float64(round(ma_top1_20, digits=6)),
+                "ma_drift_5" => Float64(round(ma_drift_5, digits=6)),
+                "ma_drift_10" => Float64(round(ma_drift_10, digits=6)),
+                "ma_drift_20" => Float64(round(ma_drift_20, digits=6)),
+                "ma_rating_5" => Float64(round(ma_rating_5, digits=6)),
+                "ma_rating_10" => Float64(round(ma_rating_10, digits=6)),
+                "ma_rating_20" => Float64(round(ma_rating_20, digits=6)),
+                "ma_entropy_5" => Float64(round(ma_entropy_5, digits=6)),
+                "ma_entropy_10" => Float64(round(ma_entropy_10, digits=6)),
+                "ma_entropy_20" => Float64(round(ma_entropy_20, digits=6)),
+            )
+            # Convert NaN/Inf values to JSON null
+            cleaned = Dict{String, Any}()
+            for (k, v) in jsonl_dict
+                cleaned[k] = (v isa AbstractFloat && !isfinite(v)) ? nothing : v
+            end
+            jsonl_str = JSON.json(cleaned)
+            println(jsonl_io, jsonl_str)
+            flush(jsonl_io)
+
             Awale.Metrics.print_progress_diagnostics(param_update_norm, progress_tracker, elo_tracker, iter)
 
             write_training_state(training_state_file_path(), iter, best_selection_score[])
@@ -859,6 +1099,7 @@ function main(args::Vector{String}=Base.ARGS)
 
     finally
         close(csv_io)
+        close(jsonl_io)
     end
 
     if start_iter[] > NUM_ITERATIONS && last_completed_iter[] == 0

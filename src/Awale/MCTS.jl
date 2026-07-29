@@ -90,7 +90,7 @@ function search(
     rng = Random.default_rng();
     add_root_noise::Bool = false,
 )
-    action, _ =
+    action, _, _, _ =
         search_with_stats(mcts, root_state, num_sims, rng; add_root_noise = add_root_noise)
     return action
 end
@@ -135,7 +135,7 @@ function search_with_stats(
     root = MCTSNode(canonicalize(root_state))
     actions = legal_actions(root.state)
     if isempty(actions)
-        return 0, zeros(Float32, 6)
+        return 0, zeros(Float32, 6), 0.0f0, 0.0f0
     end
 
     logits, _ = predict_inference(mcts.model, root.state)
@@ -160,7 +160,7 @@ function search_with_stats(
             policy[action] = root_priors[idx]
         end
         best_action = actions[argmax(root_priors)]
-        return best_action, policy, maximum(policy)
+        return best_action, policy, maximum(policy), 0.0f0
     end
 
     for _ = 1:num_sims
@@ -181,7 +181,8 @@ function search_with_stats(
     end
 
     best_action = argmax(counts)
-    return best_action, counts, maximum(counts)
+    root_q = root.value_sum[] / max(1, root.visits[])
+    return best_action, counts, maximum(counts), root_q
 end
 
 """
