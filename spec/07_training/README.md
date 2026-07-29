@@ -74,6 +74,62 @@ The repo still does **not** persist optimizer state, replay-buffer state, RNG st
 
 Checkpoint `.bin` files are also treated as **trusted-local-only** artifacts: they are produced by this repo and loaded from the local workspace. The current implementation uses Julia `Serialization` for that internal workflow.
 
+## MCTS Diagnostics (Intra-Iteration Telemetry)
+
+The training loop emits 7 read-only diagnostics metrics per iteration that quantify MCTS vs network policy alignment. All metrics observe without modifying the training loop.
+
+### Metrics
+
+| # | Metric | Description | Data Source |
+|---|--------|-------------|-------------|
+| R1 | KL Divergence | Per-position KL(target \|\| network) from MCTS target and post-update network policy | `Y_pi`, `after_probs` in `train_step` |
+| R2 | Top-K Agreement | Top-1/2/3 argmax agreement rate between target and network policies | `Y_pi`, `after_probs` in `train_step` |
+| R3 | Root Confidence | Max visit-count probability from each game's MCTS root policy | `search_with_stats` in `collect_selfplay_data` |
+| R4 | Target Entropy (Enhanced) | Distributional stats (mean, median, P25/P75/P95, min, max) of per-sample target entropy | `Y_pi` in `train_step` |
+| R5 | Policy Distance (L1) | Normalized L1 = sum(\|pi_network - pi_target\|) / 2, in [0, 1] | `after_probs`, `Y_pi` in `train_step` |
+| R7 | Network Drift | KL(softmax(logits_iter1) \|\| softmax(logits_current)) over fixed reference state set | One extra `predict_batch_inference` call per iteration |
+
+### Constraints
+
+- **C1**: Metrics 1–5 MUST derive entirely from values already computed inside `train_step`. Zero new forward passes.
+- **C2**: Network Drift adds exactly ONE `predict_batch_inference` call per iteration (plus one at iteration 1 for reference generation).
+- **C3**: No algorithm changes to `MCTS.jl`, `Model.jl`, `ReplayBuffers.jl`, `Env.jl`, or `State.jl`.
+- **C4**: Adding diagnostics MUST NOT change numerical outputs (loss values, gradients, model weights must be bit-identical to baseline).
+
+### Output Format
+
+After the existing Diagnostics block in `run_training_iteration`:
+
+```
+──────────────────────────────────────────────
+MCTS Diagnostics
+Avg KL(target || network)   Median   Max   P25 / P75 / P95
+Top-1 agreement: XX.X%   Top-2: XX.X%   Top-3: XX.X%
+Root confidence — Mean / Median / P25 / P50 / P75 / P95 / Min / Max
+Policy distance (L1) — Mean / Median / P25 / P75 / P95
+──────────────────────────────────────────────
+```
+
+After the training loop in `train.jl`:
+
+```
+──────────────────────────────────────────────
+Network Drift: X.XXXX
+──────────────────────────────────────────────
+```
+
+### Percentile Definition
+
+All percentiles (P25, P50, P75, P95) MUST use linear interpolation between sorted values (Julia `Statistics.quantile` default).
+
+### Spec Deviations (Intentional Improvements)
+
+1. **Network drift**: Implemented as per-iteration delta (not cumulative) — provides a more useful signal for tracking short-term training dynamics.
+2. **Root confidence**: Accumulated per-position (not per-game) — gives a richer distribution over all root visit counts.
+3. **Reference set**: Sourced from random play (not self-play) — avoids conflating policy bias with drift measurement.
+
+Detailed specification: `spec/changes/mcts-diagnostics/specs/mcts-diagnostics/spec.md`
+
 ## Testing checklist
 
 - [ ] replay buffer receives self-play data
