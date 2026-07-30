@@ -20,9 +20,11 @@ export play_game, collect_selfplay_data, train_step, run_training_iteration, bac
 """
     TrainingResult
 
-Return type for `run_training_iteration`. Contains the average combined loss
-and per-iteration diagnostic statistics (policy/value loss, gradient norm,
-entropy, replay coverage, game length) plus MCTS diagnostic aggregates.
+Return type for `run_training_iteration`. Contains diagnostics from one
+training iteration: optimization losses, gradient/param norms, MCTS policy
+metrics (KL, Top-K, L1), distributional statistics (P25/P50/P75/P95 for KL,
+L1, entropy, root confidence), search metrics (root Q, raw network value),
+and replay fill percentage.
 """
 struct TrainingResult
     avg_loss::Float32
@@ -242,11 +244,17 @@ function train_step(model, optimizer, states, target_pis, target_vs)
 end
 
 """
-    run_training_iteration(mcts, optimizer, model, replay_buffer; kwargs) -> Float32
+    run_training_iteration(mcts, optimizer, model, replay_buffer; kwargs) -> TrainingResult
 
-Run one training iteration: generate self-play games, collect experiences into
-the replay buffer, then perform gradient updates on sampled minibatches.
-Returns the average combined loss across all updates.
+Run one training iteration: generate self-play games via MCTS, collect
+experiences into the replay buffer, perform gradient updates on sampled
+minibatches, and compute per-iteration diagnostic metrics. Returns a
+`TrainingResult` with all loss, gradient, policy, search, and value
+calibration data.
+
+Returns a tuple `(result, calib_data)` where `result` is the `TrainingResult`
+struct and `calib_data` is a NamedTuple of `(v_pred, v_target)` for value
+calibration (accumulated across all batches in the iteration).
 """
 function run_training_iteration(
     mcts::MCTSSearch,

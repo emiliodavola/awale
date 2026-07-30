@@ -60,8 +60,8 @@ T12 (test updates) depends on T1–T9
 
 ### Phase 4: Documentation
 
-- [ ] **T10** — `docs/metrics.md`: Full restructure. Every metric gets 8-field schema (Definition/Formula/Variables/Implementation/Cost/Interpretation/Observations/Notes). Add top-level classification (7 categories). Add `## Metric Guide` with 4 combination patterns (CR-O2). Fix Top-K formula to set membership. Specify log base (ln). Separate theory from empirical. Add Search Gain section. **~350 lines | Deps: none | O9, CR-O2, CR-O3**
-- [ ] **T11** — `docs/metrics.md` §Health Dashboard: Document all states — Net:ACTIVE/STALLED/BOOTSTRAP, Srch:HIGH/LOW, Drift:LOW/MEDIUM/HIGH, ValCal:OK/HIGH/N/A, stability:ACTIVE/STALLED/BOOTSTRAP. Every threshold with rationale. Document BOOTSTRAP (replay < 10%). **~30 lines integrated into T10 | Deps: T10 | O7, O6**
+- [x] **T10** — `docs/metrics.md`: Full restructure. Every metric gets 8-field schema (Definition/Formula/Variables/Implementation/Cost/Interpretation/Observations/Notes). Add top-level classification (7 categories). Add `## Metric Guide` with 4 combination patterns (CR-O2). Fix Top-K formula to set membership. Specify log base (ln). Separate theory from empirical. Add Search Gain section. **~350 lines | Deps: none | O9, CR-O2, CR-O3**
+- [x] **T11** — `docs/metrics.md` §Health Dashboard: Document all states — Net:ACTIVE/STALLED/BOOTSTRAP, Srch:HIGH/LOW, Drift:LOW/MEDIUM/HIGH, ValCal:OK/HIGH/N/A, stability:ACTIVE/STALLED/BOOTSTRAP. Every threshold with rationale. Document BOOTSTRAP (replay < 10%). **~30 lines integrated into T10 | Deps: T10 | O7, O6**
 
 ### Phase 5: Testing
 

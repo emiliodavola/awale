@@ -159,7 +159,7 @@ append!(last_v_target, vec(step_result.v_target))
 |-------|--------|-----------|-----------|
 | **Srch:HIGH** | Top1 ≤60% AND KL ≥0.15 AND L1 ≥0.20 | All three below threshold? LOW; else HIGH | Single-signal (current Top1<80%) triggers false HIGH. Triple conjunction ensures search is genuinely providing new information across policy divergence, ranking, and distribution mass |
 | **Net:BOOTSTRAP** | Replay fill < start_threshold | replay_fill_pct < 10% | Buffer too small for representative sampling — skip learning state assessment |
-| **ValCal:WARN** | MAE > 0.5 OR Pearson < 0.3 | Either threshold breached | Value head poorly calibrated |
+| **ValCal:HIGH** | MAE $\geq$ 0.5 | MAE threshold breached | Value head poorly calibrated |
 | **ValCal:OK** | MAE ≤0.5 AND Pearson ≥0.3 | Both thresholds satisfied | Healthy value calibration |
 
 ## Open Questions
