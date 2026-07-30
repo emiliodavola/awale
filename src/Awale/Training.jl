@@ -20,9 +20,11 @@ export play_game, collect_selfplay_data, train_step, run_training_iteration, bac
 """
     TrainingResult
 
-Return type for `run_training_iteration`. Contains the average combined loss
-and per-iteration diagnostic statistics (policy/value loss, gradient norm,
-entropy, replay coverage, game length).
+Return type for `run_training_iteration`. Contains diagnostics from one
+training iteration: optimization losses, gradient/param norms, MCTS policy
+metrics (KL, Top-K, L1), distributional statistics (P25/P50/P75/P95 for KL,
+L1, entropy, root confidence), search metrics (root Q, raw network value),
+and replay fill percentage.
 """
 struct TrainingResult
     avg_loss::Float32
@@ -33,6 +35,27 @@ struct TrainingResult
     avg_target_entropy::Float32
     avg_game_len::Float64
     replay_pct::Float64
+    # MCTS diagnostic aggregates
+    kl_mean::Float32
+    kl_median::Float32
+    top1_pct::Float32
+    top2_pct::Float32
+    top3_pct::Float32
+    root_conf_mean::Float32
+    l1_mean::Float32
+    # Search Gain support
+    root_q_mean::Float32
+    network_value_mean::Float32
+    # KL distribution
+    kl_p25::Float32; kl_p50::Float32; kl_p75::Float32; kl_p95::Float32
+    # L1 distribution
+    l1_p25::Float32; l1_p50::Float32; l1_p75::Float32; l1_p95::Float32
+    # Target entropy distribution
+    entropy_mean::Float32; entropy_min::Float32; entropy_max::Float32
+    entropy_p25::Float32; entropy_p50::Float32; entropy_p75::Float32; entropy_p95::Float32
+    # Root confidence distribution
+    root_conf_min::Float32; root_conf_max::Float32
+    root_conf_p25::Float32; root_conf_p50::Float32; root_conf_p75::Float32; root_conf_p95::Float32
 end
 
 Base.isfinite(r::TrainingResult) = isfinite(r.avg_loss)
@@ -121,13 +144,17 @@ function collect_selfplay_data(
     state = initial_state(config)
     samples = Tuple{GameState,Vector{Float32},Float32}[]
     root_confidences = Float32[]
+    all_root_q = Float32[]
+    all_raw_values = Float32[]
     turns_played = 0
 
     while !is_terminal(state) && turns_played < max_turns
-        _, pi_target, root_conf =
+        _, pi_target, root_conf, root_q, raw_value =
             search_with_stats(mcts, state, sims_per_move, rng; add_root_noise = true)
         push!(samples, (canonicalize(state), pi_target, 0.0f0))
         push!(root_confidences, root_conf)
+        push!(all_root_q, root_q)
+        push!(all_raw_values, raw_value)
 
         temperature = temperature_for_turn(turns_played, temperature_moves)
         action = sample_action_from_policy(pi_target, rng, temperature)
@@ -135,7 +162,7 @@ function collect_selfplay_data(
         turns_played += 1
     end
 
-    return backfill_value_targets(samples, reward(state)), root_confidences
+    return backfill_value_targets(samples, reward(state)), root_confidences, all_root_q, all_raw_values
 end
 
 """
@@ -211,15 +238,23 @@ function train_step(model, optimizer, states, target_pis, target_vs)
         target_entropy = target_entropy,
         Y_pi = Y_pi,
         after_probs = after_probs,
+        after_values = after_values,
+        v_target = Y_v,
     )
 end
 
 """
-    run_training_iteration(mcts, optimizer, model, replay_buffer; kwargs) -> Float32
+    run_training_iteration(mcts, optimizer, model, replay_buffer; kwargs) -> TrainingResult
 
-Run one training iteration: generate self-play games, collect experiences into
-the replay buffer, then perform gradient updates on sampled minibatches.
-Returns the average combined loss across all updates.
+Run one training iteration: generate self-play games via MCTS, collect
+experiences into the replay buffer, perform gradient updates on sampled
+minibatches, and compute per-iteration diagnostic metrics. Returns a
+`TrainingResult` with all loss, gradient, policy, search, and value
+calibration data.
+
+Returns a tuple `(result, calib_data)` where `result` is the `TrainingResult`
+struct and `calib_data` is a NamedTuple of `(v_pred, v_target)` for value
+calibration (accumulated across all batches in the iteration).
 """
 function run_training_iteration(
     mcts::MCTSSearch,
@@ -242,11 +277,13 @@ function run_training_iteration(
     total_positions = 0
     total_game_length = 0
     all_root_confidences = Float32[]
+    all_root_q = Float32[]
+    all_raw_values = Float32[]
 
     for game_idx = 1:n_games
         print("\r  Self-play: $game_idx/$n_games")
         flush(stdout)
-        game_data, root_confs = collect_selfplay_data(
+        game_data, root_confs, root_qs, raw_vals = collect_selfplay_data(
             mcts,
             GameConfig(),
             sims,
@@ -257,6 +294,8 @@ function run_training_iteration(
         total_positions += length(game_data)
         total_game_length += length(game_data)
         append!(all_root_confidences, root_confs)
+        append!(all_root_q, root_qs)
+        append!(all_raw_values, raw_vals)
         for (state, pi_target, value_target) in game_data
             push_experience!(replay_buffer, Experience(state, pi_target, value_target))
         end
@@ -281,6 +320,9 @@ function run_training_iteration(
     all_l1_per_position = Float32[]
     all_pos_entropy = Float32[]
 
+    last_v_pred = Float32[]
+    last_v_target = Float32[]
+
     for _ = 1:updates_per_iteration
         batch = sample_batch(
             replay_buffer,
@@ -303,6 +345,8 @@ function run_training_iteration(
         push!(grad_norms, step_result.grad_norm)
         push!(pred_entropies, step_result.pred_entropy)
         push!(target_entropies, step_result.target_entropy)
+        append!(last_v_pred, vec(step_result.after_values))
+        append!(last_v_target, vec(step_result.v_target))
 
         # Per-position MCTS diagnostics
         Y_pi = step_result.Y_pi
@@ -335,10 +379,28 @@ function run_training_iteration(
 
     avg_loss = isempty(losses) ? 0.0f0 : sum(losses) / length(losses)
 
+    # MCTS aggregate defaults (used when no MCTS diagnostics data is available)
+    local_kl_mean = 0.0f0
+    local_kl_median = 0.0f0
+    local_top1_pct = 0.0f0
+    local_top2_pct = 0.0f0
+    local_top3_pct = 0.0f0
+    local_root_conf_mean = 0.0f0
+    local_l1_mean = 0.0f0
+    local_root_q_mean = 0.0f0
+    local_network_value_mean = 0.0f0
+    # Distributional defaults
+    kl_p25 = 0.0f0; kl_p50 = 0.0f0; kl_p75 = 0.0f0; kl_p95 = 0.0f0
+    l1_p25 = 0.0f0; l1_p50 = 0.0f0; l1_p75 = 0.0f0; l1_p95 = 0.0f0
+    ent_mean = 0.0f0; ent_min = 0.0f0; ent_max = 0.0f0
+    ent_p25 = 0.0f0; ent_p50 = 0.0f0; ent_p75 = 0.0f0; ent_p95 = 0.0f0
+    rc_min = 0.0f0; rc_max = 0.0f0
+    rc_p25 = 0.0f0; rc_p50 = 0.0f0; rc_p75 = 0.0f0; rc_p95 = 0.0f0
+
     if !isempty(policy_losses)
         replay_capacity = replay_buffer.capacity
         replay_fill = length(replay_buffer)
-        # Replay coverage = fill percentage of the circular buffer, NOT samples_consumed / capacity
+        # Replay Fill % = fill percentage of the circular buffer, NOT samples_consumed / capacity
         replay_pct = round(replay_fill / replay_capacity * 100, digits=1)
         avg_game_len = total_positions / max(1, n_games)
         avg_policy = sum(policy_losses) / length(policy_losses)
@@ -351,7 +413,7 @@ function run_training_iteration(
         println("    Positions generated      : $total_positions")
         println("    Avg game length          : $(round(avg_game_len, digits=1))")
         println("    Samples consumed         : $total_samples")
-        println("    Replay coverage          : $replay_pct %")
+        println("    Replay Fill %            : $replay_pct %")
         println("    Avg policy loss          : $(round(avg_policy, digits=4))")
         println("    Avg value loss           : $(round(avg_value, digits=4))")
         println("    Avg gradient norm        : $(round(avg_grad, digits=4))")
@@ -359,39 +421,43 @@ function run_training_iteration(
         println("    Predicted policy entropy : $(round(avg_pred_ent, digits=4))")
         println("  ─────────────────────────────────────────────────")
 
+        # ── Root Q and raw network value ──────────────
+        local_root_q_mean = isempty(all_root_q) ? 0.0f0 : sum(all_root_q) / length(all_root_q)
+        local_network_value_mean = isempty(all_raw_values) ? 0.0f0 : sum(all_raw_values) / length(all_raw_values)
+
         # ── MCTS Diagnostics ──────────────────────────
         if !isempty(all_kl_per_position)
-            kl_mean = sum(all_kl_per_position) / length(all_kl_per_position)
-            kl_med = median(all_kl_per_position)
+            local_kl_mean = sum(all_kl_per_position) / length(all_kl_per_position)
+            local_kl_median = median(all_kl_per_position)
             kl_max = maximum(all_kl_per_position)
-            kl_p25, kl_p75, kl_p95 = quantile(all_kl_per_position, [0.25, 0.75, 0.95])
+            kl_p25, kl_p50, kl_p75, kl_p95 = quantile(all_kl_per_position, [0.25, 0.50, 0.75, 0.95])
 
             println("  ── MCTS Diagnostics ──────────────────────────")
             println("    KL(target || network)")
             println(
-                "      Mean: $(round(kl_mean, digits=4))   Median: $(round(kl_med, digits=4))   Max: $(round(kl_max, digits=4))",
+                "      Mean: $(round(local_kl_mean, digits=4))   Median: $(round(local_kl_median, digits=4))   Max: $(round(kl_max, digits=4))",
             )
             println(
                 "      P25: $(round(kl_p25, digits=4))   P75: $(round(kl_p75, digits=4))   P95: $(round(kl_p95, digits=4))",
             )
 
             n_total = length(all_top1)
-            top1_pct = count(all_top1) / n_total * 100
-            top2_pct = count(all_top2) / n_total * 100
-            top3_pct = count(all_top3) / n_total * 100
+            local_top1_pct = count(all_top1) / n_total * 100
+            local_top2_pct = count(all_top2) / n_total * 100
+            local_top3_pct = count(all_top3) / n_total * 100
             println(
-                "    Top-K Agreement: Top-1: $(round(top1_pct, digits=1))%   Top-2: $(round(top2_pct, digits=1))%   Top-3: $(round(top3_pct, digits=1))%",
+                "    Top-K Agreement: Top-1: $(round(local_top1_pct, digits=1))%   Top-2: $(round(local_top2_pct, digits=1))%   Top-3: $(round(local_top3_pct, digits=1))%",
             )
 
             if !isempty(all_root_confidences)
-                rc_mean = sum(all_root_confidences) / length(all_root_confidences)
+                local_root_conf_mean = sum(all_root_confidences) / length(all_root_confidences)
                 rc_med = median(all_root_confidences)
                 rc_min = minimum(all_root_confidences)
                 rc_max = maximum(all_root_confidences)
                 rc_p25, rc_p50, rc_p75, rc_p95 = quantile(all_root_confidences, [0.25, 0.50, 0.75, 0.95])
                 println("    Root confidence")
                 println(
-                    "      Mean: $(round(rc_mean, digits=4))   Median: $(round(rc_med, digits=4))",
+                    "      Mean: $(round(local_root_conf_mean, digits=4))   Median: $(round(rc_med, digits=4))",
                 )
                 println(
                     "      P25: $(round(rc_p25, digits=4))   P50: $(round(rc_p50, digits=4))   P75: $(round(rc_p75, digits=4))   P95: $(round(rc_p95, digits=4))",
@@ -401,38 +467,53 @@ function run_training_iteration(
                 )
             end
 
-            l1_mean = sum(all_l1_per_position) / length(all_l1_per_position)
-            l1_med = median(all_l1_per_position)
-            l1_p25, l1_p75, l1_p95 = quantile(all_l1_per_position, [0.25, 0.75, 0.95])
+            local_l1_mean = sum(all_l1_per_position) / length(all_l1_per_position)
+            l1_p25, l1_p50, l1_p75, l1_p95 = quantile(all_l1_per_position, [0.25, 0.50, 0.75, 0.95])
             println("    Policy distance (L1)")
             println(
-                "      Mean: $(round(l1_mean, digits=4))   Median: $(round(l1_med, digits=4))   P25: $(round(l1_p25, digits=4))   P75: $(round(l1_p75, digits=4))   P95: $(round(l1_p95, digits=4))",
+                "      Mean: $(round(local_l1_mean, digits=4))   Median: $(round(l1_p50, digits=4))   P25: $(round(l1_p25, digits=4))   P75: $(round(l1_p75, digits=4))   P95: $(round(l1_p95, digits=4))",
             )
 
             ent_mean = sum(all_pos_entropy) / length(all_pos_entropy)
-            ent_med = median(all_pos_entropy)
             ent_min = minimum(all_pos_entropy)
             ent_max = maximum(all_pos_entropy)
-            ent_p25, ent_p75, ent_p95 = quantile(all_pos_entropy, [0.25, 0.75, 0.95])
+            ent_p25, ent_p50, ent_p75, ent_p95 = quantile(all_pos_entropy, [0.25, 0.50, 0.75, 0.95])
             println("    Target policy entropy")
             println(
-                "      Mean: $(round(ent_mean, digits=4))   Median: $(round(ent_med, digits=4))   Min: $(round(ent_min, digits=4))   Max: $(round(ent_max, digits=4))",
+                "      Mean: $(round(ent_mean, digits=4))   Median: $(round(ent_p50, digits=4))   Min: $(round(ent_min, digits=4))   Max: $(round(ent_max, digits=4))",
             )
             println(
-                "      P25: $(round(ent_p25, digits=4))   P75: $(round(ent_p75, digits=4))   P95: $(round(ent_p95, digits=4))",
+                "      P25: $(round(ent_p25, digits=4))   P50: $(round(ent_p50, digits=4))   P75: $(round(ent_p75, digits=4))   P95: $(round(ent_p95, digits=4))",
             )
             println("  ────────────────────────────────────────────────")
         end
     end
 
+    calib_data = (v_pred=last_v_pred, v_target=last_v_target)
+
     if !isempty(policy_losses)
         return TrainingResult(
             avg_loss, avg_policy, avg_value, avg_grad, avg_pred_ent, avg_target_ent,
             avg_game_len, Float64(replay_pct),
-        )
+            Float32(local_kl_mean), Float32(local_kl_median),
+            Float32(local_top1_pct), Float32(local_top2_pct), Float32(local_top3_pct),
+            Float32(local_root_conf_mean), Float32(local_l1_mean),
+            Float32(local_root_q_mean), Float32(local_network_value_mean),
+            Float32(kl_p25), Float32(kl_p50), Float32(kl_p75), Float32(kl_p95),
+            Float32(l1_p25), Float32(l1_p50), Float32(l1_p75), Float32(l1_p95),
+            Float32(ent_mean), Float32(ent_min), Float32(ent_max),
+            Float32(ent_p25), Float32(ent_p50), Float32(ent_p75), Float32(ent_p95),
+            Float32(rc_min), Float32(rc_max),
+            Float32(rc_p25), Float32(rc_p50), Float32(rc_p75), Float32(rc_p95),
+        ), calib_data
     end
 
-    return TrainingResult(avg_loss, 0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0, 0.0)
+    return TrainingResult(avg_loss, 0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0, 0.0,
+        0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0f0,
+        0.0f0, 0.0f0,
+        0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0f0,
+        0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0f0,
+        0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0f0), calib_data
 end
 
 """
