@@ -90,7 +90,7 @@ function search(
     rng = Random.default_rng();
     add_root_noise::Bool = false,
 )
-    action, _, _, _ =
+    action, _, _, _, _ =
         search_with_stats(mcts, root_state, num_sims, rng; add_root_noise = add_root_noise)
     return action
 end
@@ -118,10 +118,12 @@ function legal_action_priors(logits::AbstractVector{<:Real}, actions::Vector{Int
 end
 
 """
-    search_with_stats(mcts, root_state, num_sims, rng; add_root_noise) -> (best_action, policy)
+    search_with_stats(mcts, root_state, num_sims, rng; add_root_noise) -> (best_action, policy, max_conf, root_q, raw_network_value)
 
-Run MCTS for `num_sims` iterations, returning the best action and visit-count policy.
-When `add_root_noise` is true, Dirichlet noise is added to root priors for exploration.
+Run MCTS for `num_sims` iterations, returning the best action, visit-count policy,
+maximum policy confidence, root Q value, and the raw network value from the first
+root evaluation. When `add_root_noise` is true, Dirichlet noise is added to root
+priors for exploration.
 """
 function search_with_stats(
     mcts::MCTSSearch,
@@ -135,10 +137,10 @@ function search_with_stats(
     root = MCTSNode(canonicalize(root_state))
     actions = legal_actions(root.state)
     if isempty(actions)
-        return 0, zeros(Float32, 6), 0.0f0, 0.0f0
+        return 0, zeros(Float32, 6), 0.0f0, 0.0f0, 0.0f0
     end
 
-    logits, _ = predict_inference(mcts.model, root.state)
+    logits, root_value = predict_inference(mcts.model, root.state)
     root_priors = legal_action_priors(vec(logits), actions)
 
     if add_root_noise
@@ -160,7 +162,7 @@ function search_with_stats(
             policy[action] = root_priors[idx]
         end
         best_action = actions[argmax(root_priors)]
-        return best_action, policy, maximum(policy), 0.0f0
+        return best_action, policy, maximum(policy), 0.0f0, 0.0f0
     end
 
     for _ = 1:num_sims
@@ -182,7 +184,7 @@ function search_with_stats(
 
     best_action = argmax(counts)
     root_q = root.value_sum[] / max(1, root.visits[])
-    return best_action, counts, maximum(counts), root_q
+    return best_action, counts, maximum(counts), root_q, root_value
 end
 
 """

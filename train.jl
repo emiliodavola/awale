@@ -744,6 +744,7 @@ function main(args::Vector{String}=Base.ARGS)
     ma_buf_drift = Float32[]
     ma_buf_rating = Float32[]
     ma_buf_entropy = Float32[]
+    ma_buf_param_update = Float32[]
 
     try
     if csv_fresh
@@ -911,6 +912,7 @@ function main(args::Vector{String}=Base.ARGS)
             push!(ma_buf_drift, avg_drift_kl)
             push!(ma_buf_rating, Float32(elo_tracker.candidate_rating))
             push!(ma_buf_entropy, training_result.avg_pred_entropy)
+            push!(ma_buf_param_update, param_update_norm)
 
             ma_win(buf, n) = length(buf) >= n ? sum(buf[end-n+1:end]) / n : NaN
             ma_loss_5 = ma_win(ma_buf_loss, 5)
@@ -940,19 +942,30 @@ function main(args::Vector{String}=Base.ARGS)
                 kl_window = ma_buf_kl[end-window_size+1:end]
                 drift_window = ma_buf_drift[end-window_size+1:end]
                 top1_window = ma_buf_top1[end-window_size+1:end]
-                param_window = ma_buf_policy_loss[end-window_size+1:end]
+                param_window = ma_buf_param_update[end-window_size+1:end]
                 kl_stable = var(kl_window) < 0.001f0 ? "STALLED" : "ACTIVE"
                 drift_stable = var(drift_window) < 0.0001f0 ? "STALLED" : "ACTIVE"
                 top1_stable = var(top1_window) < 1.0f0 ? "STALLED" : "ACTIVE"
-                param_stable = var(param_window) < 0.01f0 ? "STALLED" : "ACTIVE"
+                param_stable = var(param_window) < 1.0f-8 ? "STALLED" : "ACTIVE"
                 stability_str = " KL:$kl_stable Drift:$drift_stable Top1:$top1_stable Param:$param_stable"
             else
+                kl_stable = "BOOTSTRAP"; drift_stable = "BOOTSTRAP"
+                top1_stable = "BOOTSTRAP"; param_stable = "BOOTSTRAP"
                 stability_str = " KL:BOOTSTRAP Drift:BOOTSTRAP Top1:BOOTSTRAP Param:BOOTSTRAP"
             end
 
             # ── Health dashboard ──────────────────────────────
+            # Srch health uses triple conjunction: all three signals must be
+            # below threshold to indicate LOW search usefulness. Thresholds
+            # chosen empirically: Top1 ≤60% means ranking is still fluid,
+            # KL ≤0.15 means policy hasn't collapsed, L1 ≤0.20 means
+            # distribution hasn't diverged. If any threshold is breached,
+            # search is providing genuine new signal (HIGH).
+            SRCH_TOP1_TH = 60.0f0; SRCH_KL_TH = 0.15f0; SRCH_L1_TH = 0.20f0
             net_health = delta_kl > 0.01f0 || param_update_norm > 0.01f0 ? "ACTIVE" : "STALLED"
-            srch_health = training_result.top1_pct < 80.0f0 ? "HIGH" : "LOW"
+            srch_health = (training_result.top1_pct <= SRCH_TOP1_TH &&
+                           training_result.kl_mean <= SRCH_KL_TH &&
+                           training_result.l1_mean <= SRCH_L1_TH) ? "LOW" : "HIGH"
             drift_health = avg_drift_kl < 0.01f0 ? "LOW" : (avg_drift_kl < 0.05f0 ? "MEDIUM" : "HIGH")
             promo_since = progress_tracker.last_best_iter > 0 ? iter - progress_tracker.last_best_iter : iter
             cal_health = if isfinite(value_cal.mae)
@@ -966,15 +979,22 @@ function main(args::Vector{String}=Base.ARGS)
             println("  ────────────────────────────────────────────────")
 
             # ── Warnings ───────────────────────────────────────
+            warning_messages = String[]
             if training_result.top1_pct > 95.0f0
-                println("  ⚠ Top-1 agreement $(round(training_result.top1_pct, digits=1))% — search may no longer improve policy")
+                msg = "Top-1 agreement $(round(training_result.top1_pct, digits=1))% — search may no longer improve policy"
+                push!(warning_messages, msg)
+                println("  ⚠ $msg")
             end
             if avg_drift_kl < 1.0f-6
-                println("  ⚠ Network drift near zero — training may have converged")
+                msg = "Network drift near zero — training may have converged"
+                push!(warning_messages, msg)
+                println("  ⚠ $msg")
             end
             rolling_mean = ma_win(ma_buf_policy_loss, 5)
             if isfinite(rolling_mean) && rolling_mean > 0.0f0 && param_update_norm > 5.0f0 * rolling_mean
-                println("  ⚠ Parameter update unusually large — possible instability")
+                msg = "Parameter update unusually large — possible instability"
+                push!(warning_messages, msg)
+                println("  ⚠ $msg")
             end
 
             # Write learning curve CSV row
@@ -999,7 +1019,8 @@ function main(args::Vector{String}=Base.ARGS)
             flush(csv_io)
 
             # ── Assemble JSONL entry ───────────────────────────
-            mcts_root_q = length(calib_data.v_pred) > 0 ? mean(vec(calib_data.v_pred)) : NaN
+            # Search Gain = MCTS root Q (search-improved) minus raw network value
+            search_gain = training_result.root_q_mean - training_result.network_value_mean
             jsonl_dict = Dict{String, Any}(
                 # Versioning
                 "metric_version" => METRIC_VERSION,
@@ -1033,9 +1054,39 @@ function main(args::Vector{String}=Base.ARGS)
                 "mcts_top3_pct" => Float64(round(training_result.top3_pct, digits=2)),
                 "mcts_root_conf_mean" => Float64(round(training_result.root_conf_mean, digits=6)),
                 "mcts_l1_mean" => Float64(round(training_result.l1_mean, digits=6)),
+                # KL distribution
+                "kl_p25" => Float64(round(training_result.kl_p25, digits=6)),
+                "kl_p50" => Float64(round(training_result.kl_p50, digits=6)),
+                "kl_p75" => Float64(round(training_result.kl_p75, digits=6)),
+                "kl_p95" => Float64(round(training_result.kl_p95, digits=6)),
+                # L1 distribution
+                "l1_p25" => Float64(round(training_result.l1_p25, digits=6)),
+                "l1_p50" => Float64(round(training_result.l1_p50, digits=6)),
+                "l1_p75" => Float64(round(training_result.l1_p75, digits=6)),
+                "l1_p95" => Float64(round(training_result.l1_p95, digits=6)),
+                # Target entropy distribution
+                "entropy_mean" => Float64(round(training_result.entropy_mean, digits=6)),
+                "entropy_min" => Float64(round(training_result.entropy_min, digits=6)),
+                "entropy_max" => Float64(round(training_result.entropy_max, digits=6)),
+                "entropy_p25" => Float64(round(training_result.entropy_p25, digits=6)),
+                "entropy_p50" => Float64(round(training_result.entropy_p50, digits=6)),
+                "entropy_p75" => Float64(round(training_result.entropy_p75, digits=6)),
+                "entropy_p95" => Float64(round(training_result.entropy_p95, digits=6)),
+                # Root confidence distribution
+                "root_conf_min" => Float64(round(training_result.root_conf_min, digits=6)),
+                "root_conf_max" => Float64(round(training_result.root_conf_max, digits=6)),
+                "root_conf_p25" => Float64(round(training_result.root_conf_p25, digits=6)),
+                "root_conf_p50" => Float64(round(training_result.root_conf_p50, digits=6)),
+                "root_conf_p75" => Float64(round(training_result.root_conf_p75, digits=6)),
+                "root_conf_p95" => Float64(round(training_result.root_conf_p95, digits=6)),
+                # Search Gain (CR-O1)
+                "search_gain" => Float64(round(search_gain, digits=6)),
+                "root_q_mean" => Float64(round(training_result.root_q_mean, digits=6)),
+                "network_value_mean" => Float64(round(training_result.network_value_mean, digits=6)),
                 # Drift & root Q
                 "drift_kl" => Float64(round(avg_drift_kl, digits=6)),
-                "mcts_root_q" => Float64(round(mcts_root_q, digits=6)),
+                "mcts_root_q" => Float64(round(training_result.root_q_mean, digits=6)),
+                "mcts_network_raw" => Float64(round(training_result.network_value_mean, digits=6)),
                 # Value calibration
                 "value_cal_mae" => Float64(round(value_cal.mae, digits=6)),
                 "value_cal_pearson" => Float64(round(value_cal.pearson_r, digits=6)),
@@ -1073,6 +1124,19 @@ function main(args::Vector{String}=Base.ARGS)
                 "ma_entropy_5" => Float64(round(ma_entropy_5, digits=6)),
                 "ma_entropy_10" => Float64(round(ma_entropy_10, digits=6)),
                 "ma_entropy_20" => Float64(round(ma_entropy_20, digits=6)),
+                # Dashboard health states
+                "net_health" => net_health,
+                "srch_health" => srch_health,
+                "drift_health" => drift_health,
+                "valcal_health" => cal_health,
+                # Stability states
+                "stability_kl" => kl_stable,
+                "stability_drift" => drift_stable,
+                "stability_top1" => top1_stable,
+                "stability_param" => param_stable,
+                # Warnings
+                "warning_count" => length(warning_messages),
+                "warning_messages" => warning_messages,
             )
             # Convert NaN/Inf values to JSON null
             cleaned = Dict{String, Any}()
