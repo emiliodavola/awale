@@ -310,12 +310,12 @@ end
         rng = MersenneTwister(7)
         mcts = Awale.MCTSSearch(DummyModel(), 1.5f0, 0.3f0, 0.25f0, Dict{UInt64, Tuple{Float64, Int64}}(0xdeadbeef => (99.0f0, 99)))
 
-        action_a, counts_a = Awale.search_with_stats(mcts, s, 8, rng; add_root_noise=false)
+        action_a, counts_a, _, _, _ = Awale.search_with_stats(mcts, s, 8, rng; add_root_noise=false)
 
         @test !haskey(mcts.transposition_table, 0xdeadbeef)
 
         rng = MersenneTwister(7)
-        action_b, counts_b = Awale.search_with_stats(mcts, s, 8, rng; add_root_noise=false)
+        action_b, counts_b, _, _, _ = Awale.search_with_stats(mcts, s, 8, rng; add_root_noise=false)
 
         @test action_a == action_b
         @test counts_a == counts_b
@@ -325,13 +325,13 @@ end
         s = Awale.initial_state()
         rng = MersenneTwister(3)
 
-        action_1_zero, policy_1_zero = Awale.search_with_stats(Awale.MCTSSearch(Prior1Model(), 1.5f0, 0.3f0, 0.25f0, Dict{UInt64, Tuple{Float64, Int64}}()), s, 0, rng; add_root_noise=false)
+        action_1_zero, policy_1_zero, _, _, _ = Awale.search_with_stats(Awale.MCTSSearch(Prior1Model(), 1.5f0, 0.3f0, 0.25f0, Dict{UInt64, Tuple{Float64, Int64}}()), s, 0, rng; add_root_noise=false)
         rng = MersenneTwister(3)
-        action_6_zero, policy_6_zero = Awale.search_with_stats(Awale.MCTSSearch(Prior6Model(), 1.5f0, 0.3f0, 0.25f0, Dict{UInt64, Tuple{Float64, Int64}}()), s, 0, rng; add_root_noise=false)
+        action_6_zero, policy_6_zero, _, _, _ = Awale.search_with_stats(Awale.MCTSSearch(Prior6Model(), 1.5f0, 0.3f0, 0.25f0, Dict{UInt64, Tuple{Float64, Int64}}()), s, 0, rng; add_root_noise=false)
         rng = MersenneTwister(3)
-        action_1, counts_1 = Awale.search_with_stats(Awale.MCTSSearch(Prior1Model(), 1.5f0, 0.3f0, 0.25f0, Dict{UInt64, Tuple{Float64, Int64}}()), s, 1, rng; add_root_noise=false)
+        action_1, counts_1, _, _, _ = Awale.search_with_stats(Awale.MCTSSearch(Prior1Model(), 1.5f0, 0.3f0, 0.25f0, Dict{UInt64, Tuple{Float64, Int64}}()), s, 1, rng; add_root_noise=false)
         rng = MersenneTwister(3)
-        action_6, counts_6 = Awale.search_with_stats(Awale.MCTSSearch(Prior6Model(), 1.5f0, 0.3f0, 0.25f0, Dict{UInt64, Tuple{Float64, Int64}}()), s, 1, rng; add_root_noise=false)
+        action_6, counts_6, _, _, _ = Awale.search_with_stats(Awale.MCTSSearch(Prior6Model(), 1.5f0, 0.3f0, 0.25f0, Dict{UInt64, Tuple{Float64, Int64}}()), s, 1, rng; add_root_noise=false)
 
         @test action_1_zero == 1
         @test policy_1_zero[1] > 0.99f0
@@ -1049,7 +1049,11 @@ end
     @testset "TrainingResult MCTS aggregate fields" begin
         @testset "no-data path fields are zero" begin
             r = Awale.TrainingResult(0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0, 0.0,
-                0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0f0)
+                0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0f0,
+                0.0f0, 0.0f0,
+                0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0f0,
+                0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0f0,
+                0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0f0, 0.0f0)
             @test r.kl_mean === 0.0f0
             @test r.kl_median === 0.0f0
             @test r.top1_pct === 0.0f0
@@ -1082,6 +1086,12 @@ end
             @test result.top2_pct >= result.top1_pct
             @test result.top3_pct >= result.top2_pct
             @test result.l1_mean >= 0.0f0
+            @test result.root_q_mean isa Float32
+            @test result.network_value_mean isa Float32
+            @test result.kl_p25 <= result.kl_p50 <= result.kl_p75
+            @test result.l1_p25 <= result.l1_p50 <= result.l1_p75
+            @test result.root_conf_min <= result.root_conf_mean
+            @test result.entropy_mean >= 0.0f0
         end
     end
 end

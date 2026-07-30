@@ -233,4 +233,93 @@ using .Awale
         @test vc.pearson_r isa AbstractFloat
         @test vc.spearman_rho isa AbstractFloat
     end
+
+    @testset "TrainingResult has new Search Gain fields" begin
+        rng = MersenneTwister(11)
+        model = Awale.create_model()
+        optimizer = Flux.setup(Flux.Adam(1.0f-3), model)
+        replay_buffer = Awale.ReplayBuffers.ReplayBuffer(256)
+        mcts = Awale.MCTSSearch(model, 1.5f0, 0.3f0, 0.25f0, Dict{UInt64, Tuple{Float64, Int64}}())
+
+        result, _ = Awale.run_training_iteration(
+            mcts, optimizer, model, replay_buffer;
+            n_games=1, sims=1, batch_size=8, updates_per_iteration=2,
+            replay_recent_fraction=0.5, replay_recent_window=32,
+            temperature_moves=2, rng=rng, max_turns=1000,
+        )
+
+        @test hasfield(Awale.TrainingResult, :root_q_mean)
+        @test hasfield(Awale.TrainingResult, :network_value_mean)
+        @test hasfield(Awale.TrainingResult, :kl_p25)
+        @test hasfield(Awale.TrainingResult, :kl_p75)
+        @test hasfield(Awale.TrainingResult, :l1_p25)
+        @test hasfield(Awale.TrainingResult, :l1_p75)
+        @test hasfield(Awale.TrainingResult, :entropy_mean)
+        @test hasfield(Awale.TrainingResult, :entropy_min)
+        @test hasfield(Awale.TrainingResult, :entropy_max)
+        @test hasfield(Awale.TrainingResult, :root_conf_min)
+        @test hasfield(Awale.TrainingResult, :root_conf_max)
+        @test hasfield(Awale.TrainingResult, :root_conf_p25)
+        @test hasfield(Awale.TrainingResult, :root_conf_p75)
+
+        # root_q_mean and network_value_mean should be finite
+        @test isfinite(result.root_q_mean) || result.root_q_mean == 0.0f0
+        @test isfinite(result.network_value_mean) || result.network_value_mean == 0.0f0
+
+        # Search gain = root Q - network value
+        search_gain = result.root_q_mean - result.network_value_mean
+        @test isfinite(search_gain) || search_gain == 0.0f0
+    end
+
+    @testset "JSONL new fields serialization" begin
+        mktempdir() do tmpdir
+            jsonl_path = joinpath(tmpdir, "new_fields.jsonl")
+            open(jsonl_path, "w") do io
+                d = Dict(
+                    "search_gain" => 0.042,
+                    "root_q_mean" => 0.15,
+                    "network_value_mean" => 0.108,
+                    "kl_p25" => 0.1, "kl_p50" => 0.3, "kl_p75" => 0.6, "kl_p95" => 1.2,
+                    "l1_p25" => 0.05, "l1_p50" => 0.12, "l1_p75" => 0.3, "l1_p95" => 0.5,
+                    "entropy_mean" => 0.8, "entropy_min" => 0.1, "entropy_max" => 1.2,
+                    "entropy_p25" => 0.4, "entropy_p50" => 0.7, "entropy_p75" => 1.0, "entropy_p95" => 1.1,
+                    "root_conf_min" => 0.05, "root_conf_max" => 0.95,
+                    "root_conf_p25" => 0.2, "root_conf_p50" => 0.4, "root_conf_p75" => 0.6, "root_conf_p95" => 0.8,
+                    "net_health" => "ACTIVE", "srch_health" => "HIGH",
+                    "drift_health" => "LOW", "valcal_health" => "OK",
+                    "stability_kl" => "ACTIVE", "stability_drift" => "STALLED",
+                    "stability_top1" => "ACTIVE", "stability_param" => "BOOTSTRAP",
+                    "warning_count" => 0, "warning_messages" => [],
+                    "metric_version" => "1.0.0",
+                )
+                println(io, JSON.json(d))
+            end
+
+            parsed = JSON.parse(readlines(jsonl_path)[1])
+            @test haskey(parsed, "search_gain")
+            @test haskey(parsed, "root_q_mean")
+            @test haskey(parsed, "network_value_mean")
+            @test haskey(parsed, "kl_p25")
+            @test haskey(parsed, "kl_p95")
+            @test haskey(parsed, "l1_p25")
+            @test haskey(parsed, "l1_p95")
+            @test haskey(parsed, "entropy_mean")
+            @test haskey(parsed, "entropy_min")
+            @test haskey(parsed, "entropy_max")
+            @test haskey(parsed, "root_conf_min")
+            @test haskey(parsed, "root_conf_max")
+            @test haskey(parsed, "root_conf_p95")
+            @test haskey(parsed, "net_health")
+            @test haskey(parsed, "srch_health")
+            @test haskey(parsed, "drift_health")
+            @test haskey(parsed, "valcal_health")
+            @test haskey(parsed, "stability_kl")
+            @test haskey(parsed, "stability_drift")
+            @test haskey(parsed, "stability_param")
+            @test haskey(parsed, "warning_count")
+            @test haskey(parsed, "warning_messages")
+            @test parsed["search_gain"] == 0.042
+            @test parsed["warning_messages"] == []
+        end
+    end
 end
