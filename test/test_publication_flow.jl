@@ -289,4 +289,31 @@ end
         @test Awale.Publication.format_metric(0.5) == "0.5"
         @test Awale.Publication.format_metric(300) == "300"
     end
+
+    @testset "read_bundle_configs parses bundle config TOMLs defensively" begin
+        mktempdir() do root_dir
+            empty_bundle = joinpath(root_dir, "empty")
+            mkpath(empty_bundle)
+            training_cfg, model_cfg = Awale.Publication.read_bundle_configs(empty_bundle)
+            @test training_cfg == Dict{String,Any}()
+            @test model_cfg == Dict{String,Any}()
+        end
+
+        mktempdir() do root_dir
+            bad_bundle = joinpath(root_dir, "bad")
+            mkpath(joinpath(bad_bundle, "artifacts"))
+            write(joinpath(bad_bundle, "artifacts", "training_config.toml"), "not = [valid")
+            training_cfg, model_cfg = Awale.Publication.read_bundle_configs(bad_bundle)
+            @test training_cfg == Dict{String,Any}()
+            @test model_cfg == Dict{String,Any}()
+        end
+
+        mktempdir() do root_dir
+            bundle_dir = Awale.Publication.stage_release_bundle(seed_release_inputs(root_dir); root_dir=root_dir)
+            training_cfg, model_cfg = Awale.Publication.read_bundle_configs(bundle_dir)
+            @test training_cfg == Dict{String,Any}("training" => true)
+            @test model_cfg["model"]["architecture"] == "mlp"
+            @test length(model_cfg["model"]["variants"]["mlp"]["layers"]["shared"]) == 2
+        end
+    end
 end

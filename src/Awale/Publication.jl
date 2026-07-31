@@ -183,6 +183,29 @@ function format_metric(x::Real)::String
 end
 
 """
+    read_bundle_configs(bundle_dir) -> (training_config, model_config)
+
+Parse the bundled `artifacts/training_config.toml` and `artifacts/model_config.toml`
+into dictionaries. Missing or malformed files degrade to empty dictionaries so
+older bundles without config snapshots never break card rendering.
+"""
+function read_bundle_configs(
+    bundle_dir::AbstractString,
+)::Tuple{Dict{String,Any},Dict{String,Any}}
+    training_config = try
+        TOML.parsefile(joinpath(String(bundle_dir), "artifacts", "training_config.toml"))
+    catch
+        Dict{String,Any}()
+    end
+    model_config = try
+        TOML.parsefile(joinpath(String(bundle_dir), "artifacts", "model_config.toml"))
+    catch
+        Dict{String,Any}()
+    end
+    return (training_config, model_config)
+end
+
+"""
     write_model_card_front_matter(io::IO, summary::Dict{String, Any})
 
 Write YAML front-matter for a Hugging Face model card to `io`, extracting
