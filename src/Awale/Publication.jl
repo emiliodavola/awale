@@ -771,59 +771,285 @@ function release_model_card(
 
     io = IOBuffer()
     write_model_card_front_matter(io, summary)
-    println(io, "# Awale release $release_id model card")
+    println(io, "# $CARD_MODEL_NAME")
     println(io)
     println(
         io,
         "This model card documents an Awale policy/value network implemented in Julia with Flux.jl. The YAML metadata above comes from the release summary and should be treated as the source of truth for this bundle.",
     )
     println(io)
-    println(io, "## Release metadata")
-    println(io, "- Architecture: $architecture")
+    println(io, "## Release")
     println(io, "- Release ID: $release_id")
     println(io, "- Commit SHA: $commit_sha")
     println(io, "- Timestamp: $timestamp")
-    println(io, "- Checkpoint dir: $checkpoint_dir")
     println(io, "- Bundle kind: $(bundle_kind)")
     println(io, "- Model export format: $(model_export_format)")
     println(io)
-    println(io, "## Metrics")
-    println(io, "- Last iteration: $last_iter")
-    println(io, "- Best selection score: $best_selection_score")
-    println(io, "- Baseline win rate: $baseline_win_rate")
-    println(io, "- Final loss: $final_loss")
-    if selection_current_best_rate !== nothing
-        println(io, "- Selection current best rate: $selection_current_best_rate")
-    end
-    if selection_promoted !== nothing
-        println(io, "- Selection promoted: $selection_promoted")
-    end
+    card_model_details(
+        io;
+        architecture = architecture,
+        model_params = model_params,
+        timestamp = timestamp,
+    )
     println(io)
-    println(io, "## Source paths")
-    println(io, "- Runtime config snapshot: $runtime_config_snapshot")
-    println(io, "- Model config snapshot: $model_config_snapshot")
-    println(io, "- Training state: $training_state_path")
-    println(io, "- Last checkpoint: $last_checkpoint_path")
-    println(io, "- Best checkpoint: $best_checkpoint_path")
-    println(io, "- Final checkpoint: $final_checkpoint_path")
+    card_usage(io)
     println(io)
-    println(io, "## Bundle contents")
-    println(io, "- `$(RELEASE_SUMMARY_FILE)`")
-    println(io, "- `$(MANIFEST_FILE)`")
-    println(io, "- `$(MODEL_CARD_FILE)`")
-    for bundle_relpath in sort!(collect(keys(artifact_specs)))
-        println(io, "- `$(bundle_relpath)`")
-    end
-
+    card_training_details(io; training_config = training_config, last_iter = last_iter)
     println(io)
-    println(io, "## Code")
-    println(io, "- Training scripts")
-    println(io, "- Inference code")
-    println(io, "- Evaluation scripts")
-    println(io, "- Configuration files")
-    println(io, "- <https://github.com/emiliodavola/awale>")
-
+    card_evaluation(
+        io;
+        best_selection_score = best_selection_score,
+        baseline_win_rate = baseline_win_rate,
+        final_loss = final_loss,
+        selection_current_best_rate = selection_current_best_rate,
+        selection_promoted = selection_promoted,
+    )
+    println(io)
+    card_limitations(io)
+    println(io)
+    card_bundle_contents(io, artifact_specs)
+    println(io)
+    card_code_section(io)
+    println(io)
+    card_citation(io)
     return String(take!(io))
+end
+
+"""
+    card_model_details(io; architecture, model_params, timestamp)
+
+Write the `## Model Details` section: architecture, parameter count, framework,
+input encoding, outputs, license, and release date.
+"""
+function card_model_details(
+    io::IO;
+    architecture::AbstractString,
+    model_params::Union{Int,Nothing},
+    timestamp::AbstractString,
+)
+    println(io, "## Model Details")
+    println(io, "- Architecture: $architecture")
+    param_count = model_params === nothing ? "not recorded" : string(model_params)
+    println(io, "- Parameter count: $param_count")
+    println(io, "- Framework: Julia with Flux.jl")
+    println(
+        io,
+        "- Input encoding: canonicalized board state as a 4x12 tensor (48 Float32 features)",
+    )
+    println(
+        io,
+        "- Outputs: policy logits for 6 local actions and a scalar value in [-1, 1]",
+    )
+    println(io, "- License: MIT")
+    println(io, "- Release date: $timestamp")
+end
+
+"""
+    card_usage(io)
+
+Write the `## Usage` section: how to load the public weights and run inference.
+"""
+function card_usage(io::IO)
+    println(io, "## Usage")
+    println(
+        io,
+        "The model is a policy/value network trained by self-play. Load the Float32 weights and run inference with Julia and Flux.jl:",
+    )
+    println(io)
+    println(io, "```julia")
+    println(io, "using Awale")
+    println(io, "model = Awale.Model.load_public_model(\"artifacts/model_best.f32\")")
+    println(io, "logits, value = Awale.predict_inference(model, Awale.initial_state())")
+    println(io, "```")
+    println(io)
+    println(
+        io,
+        "`predict_inference` returns policy logits for the 6 local actions of the player to move and a scalar position value in [-1, 1].",
+    )
+end
+
+"""
+    card_training_details(io; training_config, last_iter)
+
+Write the `## Training Details` section: the AlphaZero-style self-play recipe and,
+when present, the bundled training configuration.
+"""
+function card_training_details(
+    io::IO;
+    training_config::Dict{String,Any},
+    last_iter::Int,
+)
+    println(io, "## Training Details")
+    println(
+        io,
+        "The network was trained with AlphaZero-style self-play: Monte Carlo Tree Search (PUCT) generates games, and the network is updated on sampled positions with policy and value targets.",
+    )
+    println(io, "The training state reports `last_iter = $last_iter` iterations.")
+    if isempty(training_config)
+        println(io, "No bundled training configuration was recorded for this release.")
+    else
+        training_flag = get(training_config, "training", "n/a")
+        println(io, "Bundled training configuration: `training = $training_flag`.")
+    end
+end
+
+"""
+    card_evaluation(io; best_selection_score, baseline_win_rate, final_loss, selection_current_best_rate, selection_promoted)
+
+Write the `## Evaluation` section: methodology (RandomAgent baseline, 400 MCTS
+simulations, 100 evaluation games, 56% promotion gate over 200 games), the rounded
+metrics, and the per-checkpoint promotion narrative derived from the optional
+`selection_promoted` flag. A global flag line is never printed.
+"""
+function card_evaluation(
+    io::IO;
+    best_selection_score::Real,
+    baseline_win_rate::Real,
+    final_loss::Real,
+    selection_current_best_rate::Union{Nothing,Real},
+    selection_promoted::Union{Nothing,Bool},
+)
+    println(io, "## Evaluation")
+    println(
+        io,
+        "Evaluation pits the trained network against a RandomAgent baseline with 400 MCTS simulations per move over 100 evaluation games. A checkpoint is promoted only when it reaches a decided win rate of at least 56% over 200 promotion games against the current best.",
+    )
+    println(io)
+    println(io, "Metrics:")
+    println(io, "- Best selection score: $(format_metric(best_selection_score))")
+    println(io, "- Baseline win rate: $(format_metric(baseline_win_rate))")
+    println(io, "- Final loss: $(format_metric(final_loss))")
+    if selection_current_best_rate !== nothing
+        println(
+            io,
+            "- Selection current best rate: $(format_metric(selection_current_best_rate))",
+        )
+    end
+    println(io)
+    println(io, "Checkpoint status:")
+    best_narrative = if selection_promoted === true
+        "passed the promotion gate when selected"
+    elseif selection_promoted === false
+        "did not pass the promotion gate at the last selection"
+    else
+        "best-scoring checkpoint during training"
+    end
+    println(io, "- `model_best`: $best_narrative")
+    println(io, "- `model_last`: final run state; not subject to the promotion gate")
+    println(io, "- `model_final`: final run state; not subject to the promotion gate")
+end
+
+"""
+    card_limitations(io)
+
+Write the `## Limitations` section.
+"""
+function card_limitations(io::IO)
+    println(io, "## Limitations")
+    println(io, "- The model was trained exclusively by self-play and has not seen human games.")
+    println(
+        io,
+        "- Policy outputs cover 6 local actions; effective strength depends on the MCTS budget used at inference time.",
+    )
+    println(
+        io,
+        "- Evaluation reflects the fixed RandomAgent baseline and the 400-simulation search budget.",
+    )
+end
+
+const BUNDLE_ARTIFACT_DESCRIPTIONS = Dict{String,String}(
+    "release_summary.toml" => "release metadata and evaluation metrics",
+    "model_best.f32" => "best checkpoint weights (promotion-gated)",
+    "model_best.bin" => "best checkpoint weights (promotion-gated)",
+    "model_last.f32" => "last checkpoint weights (final run state)",
+    "model_last.bin" => "last checkpoint weights (final run state)",
+    "model_final.f32" => "final checkpoint weights (final run state)",
+    "model_final.bin" => "final checkpoint weights (final run state)",
+    "training_state.toml" => "training state snapshot",
+    "training_config.toml" => "runtime configuration snapshot",
+    "model_config.toml" => "model configuration snapshot",
+    "manifest.toml" => "bundle manifest with integrity checksums",
+    "README.md" => "this model card",
+)
+
+"""
+    artifact_description(bundle_relpath) -> String
+
+Return a one-line description of a bundled artifact's role, keyed by filename.
+"""
+function artifact_description(bundle_relpath::AbstractString)::String
+    return get(
+        BUNDLE_ARTIFACT_DESCRIPTIONS,
+        basename(String(bundle_relpath)),
+        "bundled release artifact",
+    )
+end
+
+"""
+    card_bundle_contents(io, artifact_specs)
+
+Write the `## Bundle contents` section, listing every bundled file exactly once
+(sorted artifact relpaths, with `manifest.toml`/`README.md` appended only when
+absent), each with a one-line description of its role.
+"""
+function card_bundle_contents(io::IO, artifact_specs::Dict{String,String})
+    println(io, "## Bundle contents")
+    files = String[String(relpath) for relpath in sort!(collect(keys(artifact_specs)))]
+    for extra in (MANIFEST_FILE, MODEL_CARD_FILE)
+        extra in files || push!(files, extra)
+    end
+    for file in files
+        println(io, "- `$file`: $(artifact_description(file))")
+    end
+end
+
+"""
+    card_code_section(io)
+
+Write the `## Code` section: hyperlinks into the GitHub repository covering
+training scripts, inference code, evaluation scripts, configuration files,
+and the repository itself (listed last).
+"""
+function card_code_section(io::IO)
+    println(io, "## Code")
+    println(io, "- [Training scripts](https://github.com/emiliodavola/awale/blob/main/train.jl)")
+    println(
+        io,
+        "- [Inference code](https://github.com/emiliodavola/awale/blob/main/src/Awale/Model.jl)",
+    )
+    println(
+        io,
+        "- [Evaluation scripts](https://github.com/emiliodavola/awale/blob/main/checkpoint_arena.jl)",
+    )
+    println(
+        io,
+        "- [Configuration files](https://github.com/emiliodavola/awale/blob/main/src/Awale/config.toml)",
+    )
+    println(io, "- [Repository](https://github.com/emiliodavola/awale)")
+end
+
+"""
+    card_citation(io)
+
+Write the `## Citation` section: a BibTeX entry for the repository and the license.
+"""
+function card_citation(io::IO)
+    println(io, "## Citation")
+    println(io, "If you use this model or repository in your work, please cite the repository:")
+    println(io)
+    println(io, "```bibtex")
+    println(io, "@misc{awale2026,")
+    println(
+        io,
+        "  title = {Awale AlphaZero-like: self-play reinforcement learning for Awale},",
+    )
+    println(io, "  author = {Emilio Correa Dávola},")
+    println(io, "  year = {2026},")
+    println(io, "  howpublished = {\\url{https://github.com/emiliodavola/awale}}")
+    println(io, "}")
+    println(io, "```")
+    println(io)
+    println(io, "The model is released under the MIT license.")
 end
 
 """
