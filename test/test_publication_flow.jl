@@ -615,6 +615,33 @@ end
         @test occursin("at least 56% over 200 promotion games", card)
     end
 
+    @testset "card usage references the bundled best-checkpoint file" begin
+        f32_specs = Dict{String,String}(
+            "release_summary.toml" => "s",
+            "artifacts/model_best.f32" => "b",
+        )
+        card = Awale.Publication.release_model_card(
+            synthetic_summary(),
+            f32_specs;
+            bundle_kind = "public_safe",
+            model_export_format = "float32",
+        )
+        @test occursin("load_public_model(\"artifacts/model_best.f32\")", card)
+
+        bin_specs = Dict{String,String}(
+            "release_summary.toml" => "s",
+            "artifacts/model_best.bin" => "b",
+        )
+        card = Awale.Publication.release_model_card(
+            synthetic_summary(),
+            bin_specs;
+            bundle_kind = "local_trusted",
+            model_export_format = "serialization",
+        )
+        @test occursin("load_public_model(\"artifacts/model_best.bin\")", card)
+        @test !occursin("model_best.f32", card)
+    end
+
     @testset "read_bundle_configs parses bundle config TOMLs defensively" begin
         mktempdir() do root_dir
             empty_bundle = joinpath(root_dir, "empty")

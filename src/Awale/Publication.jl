@@ -808,7 +808,11 @@ function release_model_card(
         timestamp = timestamp,
     )
     println(io)
-    card_usage(io)
+    card_usage(
+        io;
+        artifact_specs = artifact_specs,
+        model_export_format = model_export_format,
+    )
     println(io)
     card_training_details(io; training_config = training_config, last_iter = last_iter)
     println(io)
@@ -862,20 +866,46 @@ function card_model_details(
 end
 
 """
-    card_usage(io)
+    best_checkpoint_bundle_path(artifact_specs, model_export_format) -> String
 
-Write the `## Usage` section: how to load the public weights and run inference.
+Return the bundle-relative path of the best-checkpoint weights that actually ship
+in the bundle, so the Usage snippet always references a real file. Prefers the
+artifact listed in `artifact_specs` (Float32 export first), falling back to the
+export-format convention when no best checkpoint is bundled.
 """
-function card_usage(io::IO)
+function best_checkpoint_bundle_path(
+    artifact_specs::AbstractDict,
+    model_export_format::AbstractString,
+)::String
+    for candidate in ("artifacts/model_best.f32", "artifacts/model_best.bin")
+        haskey(artifact_specs, candidate) && return candidate
+    end
+    return String(model_export_format) == "float32" ? "artifacts/model_best.f32" :
+           "artifacts/model_best.bin"
+end
+
+"""
+    card_usage(io; artifact_specs, model_export_format)
+
+Write the `## Usage` section: how to load the bundled weights and run inference.
+The weights path is derived from the actual bundle so the snippet never points at
+a file the release does not ship.
+"""
+function card_usage(
+    io::IO;
+    artifact_specs::Dict{String,String},
+    model_export_format::AbstractString,
+)
+    weights_path = best_checkpoint_bundle_path(artifact_specs, model_export_format)
     println(io, "## Usage")
     println(
         io,
-        "The model is a policy/value network trained by self-play. Load the Float32 weights and run inference with Julia and Flux.jl:",
+        "The model is a policy/value network trained by self-play. Load the bundled weights and run inference with Julia and Flux.jl:",
     )
     println(io)
     println(io, "```julia")
     println(io, "using Awale")
-    println(io, "model = Awale.Model.load_public_model(\"artifacts/model_best.f32\")")
+    println(io, "model = Awale.Model.load_public_model(\"$weights_path\")")
     println(io, "logits, value = Awale.predict_inference(model, Awale.initial_state())")
     println(io, "```")
     println(io)
