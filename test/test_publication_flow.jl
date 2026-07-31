@@ -585,10 +585,8 @@ end
 
     @testset "card evaluation reads budgets from the bundled config" begin
         budgets = Dict{String,Any}(
-            "evaluation" => Dict{String,Any}(
-                "sims_per_eval" => 100,
-                "eval_games" => 50,
-            ),
+            "evaluation" =>
+                Dict{String,Any}("sims_per_eval" => 100, "eval_games" => 50),
             "selection" => Dict{String,Any}(
                 "promotion_threshold" => 60.0,
                 "promotion_games" => 150,

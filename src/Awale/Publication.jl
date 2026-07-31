@@ -334,8 +334,7 @@ function write_model_card_front_matter(io::IO, summary::Dict{String,Any})
     best_selection_score = metrics["best_selection_score"]
     baseline_win_rate = metrics["baseline_win_rate"]
     final_loss = metrics["final_loss"]
-    selection_current_best_rate =
-        get(metrics, "selection_current_best_rate", nothing)
+    selection_current_best_rate = get(metrics, "selection_current_best_rate", nothing)
 
     println(io, "---")
     println(io, "license: mit")
@@ -781,8 +780,7 @@ function release_model_card(
     best_selection_score = metrics["best_selection_score"]
     baseline_win_rate = metrics["baseline_win_rate"]
     final_loss = metrics["final_loss"]
-    selection_current_best_rate =
-        get(metrics, "selection_current_best_rate", nothing)
+    selection_current_best_rate = get(metrics, "selection_current_best_rate", nothing)
     selection_promoted = get(metrics, "selection_promoted", nothing)
 
     io = IOBuffer()
