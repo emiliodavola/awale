@@ -256,8 +256,9 @@ function model_parameter_count(model_config)::Union{Int,Nothing}
                     kernel = get(layer, "kernel", nothing)
                     haskey(layer, "in") && haskey(layer, "out") && kernel !== nothing ||
                         return nothing
-                    total += prod(Int.(kernel)) * Int(layer["in"]) * Int(layer["out"]) +
-                             Int(layer["out"])
+                    total +=
+                        prod(Int.(kernel)) * Int(layer["in"]) * Int(layer["out"]) +
+                        Int(layer["out"])
                 end
             end
         end
@@ -874,11 +875,7 @@ end
 Write the `## Training Details` section: the AlphaZero-style self-play recipe and,
 when present, the bundled training configuration.
 """
-function card_training_details(
-    io::IO;
-    training_config::Dict{String,Any},
-    last_iter::Int,
-)
+function card_training_details(io::IO; training_config::Dict{String,Any}, last_iter::Int)
     println(io, "## Training Details")
     println(
         io,
@@ -946,7 +943,10 @@ Write the `## Limitations` section.
 """
 function card_limitations(io::IO)
     println(io, "## Limitations")
-    println(io, "- The model was trained exclusively by self-play and has not seen human games.")
+    println(
+        io,
+        "- The model was trained exclusively by self-play and has not seen human games.",
+    )
     println(
         io,
         "- Policy outputs cover 6 local actions; effective strength depends on the MCTS budget used at inference time.",
@@ -1012,7 +1012,10 @@ and the repository itself (listed last).
 """
 function card_code_section(io::IO)
     println(io, "## Code")
-    println(io, "- [Training scripts](https://github.com/emiliodavola/awale/blob/main/train.jl)")
+    println(
+        io,
+        "- [Training scripts](https://github.com/emiliodavola/awale/blob/main/train.jl)",
+    )
     println(
         io,
         "- [Inference code](https://github.com/emiliodavola/awale/blob/main/src/Awale/Model.jl)",
@@ -1035,7 +1038,10 @@ Write the `## Citation` section: a BibTeX entry for the repository and the licen
 """
 function card_citation(io::IO)
     println(io, "## Citation")
-    println(io, "If you use this model or repository in your work, please cite the repository:")
+    println(
+        io,
+        "If you use this model or repository in your work, please cite the repository:",
+    )
     println(io)
     println(io, "```bibtex")
     println(io, "@misc{awale2026,")
@@ -1362,10 +1368,8 @@ function write_release_bundle(
     model_export_format::AbstractString,
 )
     training_config, model_config = read_bundle_configs(bundle_dir)
-    model_params = public_model_parameter_count(
-        bundle_dir;
-        model_export_format = model_export_format,
-    )
+    model_params =
+        public_model_parameter_count(bundle_dir; model_export_format = model_export_format)
     write_release_model_card(
         bundle_dir,
         summary,
