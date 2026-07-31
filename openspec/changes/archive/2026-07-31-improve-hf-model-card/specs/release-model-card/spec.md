@@ -1,6 +1,6 @@
-# release-model-card
+# Delta for release-model-card
 
-## Requirements
+## ADDED Requirements
 
 ### Requirement: Stable Card Structure
 
@@ -12,26 +12,6 @@ The card MUST use a stable title and description naming the model, not a build/r
 - WHEN the card is rendered
 - THEN the title is the stable model name, not "# Awale release <id> model card"
 - AND all listed sections appear, release ID moved into metadata
-
-### Requirement: Code Section in Model Card
-
-The `release_model_card()` function MUST emit a `## Code` section after `## Bundle contents` and before the closing return. Every list item MUST be a hyperlink into the GitHub repository; plain-text bullets are forbidden. Items MUST cover training scripts, inference code, evaluation scripts, configuration files, and the repository, with the repository link last.
-
-(Previously: exactly five items — four plain-text bullets plus one bare repo URL. The "Existing sections are unmodified" scenario is superseded: sections are restructured and `## Source paths` is dropped.)
-
-#### Scenario: Code section uses real links
-
-- GIVEN a valid release summary with all required keys
-- WHEN `release_model_card()` is called
-- THEN the output contains `"## Code"`
-- AND every item links to `github.com/emiliodavola/awale`
-- AND the repository link appears last
-
-#### Scenario: No dead bullets remain
-
-- GIVEN a rendered card
-- WHEN the `## Code` section is inspected
-- THEN no item is plain text without a hyperlink
 
 ### Requirement: Per-Checkpoint Promotion Semantics
 
@@ -120,11 +100,33 @@ The card MUST render without error for releases lacking the new config files (`t
 - THEN all card-text assertions pass
 - AND none reference the build-ID title or dead-bullet Code list
 
+## MODIFIED Requirements
+
+### Requirement: Code Section in Model Card
+
+The `release_model_card()` function MUST emit a `## Code` section after `## Bundle contents` and before the closing return. Every list item MUST be a hyperlink into the GitHub repository; plain-text bullets are forbidden. Items MUST cover training scripts, inference code, evaluation scripts, configuration files, and the repository, with the repository link last.
+
+(Previously: exactly five items — four plain-text bullets plus one bare repo URL. The "Existing sections are unmodified" scenario is superseded: sections are restructured and `## Source paths` is dropped.)
+
+#### Scenario: Code section uses real links
+
+- GIVEN a valid release summary with all required keys
+- WHEN `release_model_card()` is called
+- THEN the output contains `"## Code"`
+- AND every item links to `github.com/emiliodavola/awale`
+- AND the repository link appears last
+
+#### Scenario: No dead bullets remain
+
+- GIVEN a rendered card
+- WHEN the `## Code` section is inspected
+- THEN no item is plain text without a hyperlink
+
 ### Requirement: Version Gate for Bundle Validity
 
 `MODEL_CARD_GENERATOR_VERSION` MUST be `3`. `bundle_is_valid()` MUST reject any bundle whose `model_card_generator_version` differs from `3`, forcing a restage of cached bundles.
 
-(Previously: optional `1`/`2`; `bundle_is_valid()` accepted the current version. Renamed from "Version Gate for Bundle Validity (Optional)" — the version is now fixed and mandatory.)
+(Previously: optional `1`/`2`; `bundle_is_valid()` accepted the current version.)
 
 #### Scenario: Cached bundles are restaged
 
@@ -139,3 +141,14 @@ The card MUST render without error for releases lacking the new config files (`t
 - WHEN a bundle is staged
 - THEN the manifest records `model_card_generator_version = 3`
 - AND `bundle_is_valid()` returns `true`
+
+## RENAMED Requirements
+
+### Requirement: Version Gate for Bundle Validity (Optional) → Version Gate for Bundle Validity
+
+(Reason: the version is fixed and mandatory; "(Optional)" is misleading.)
+(Migration: "None" — the MODIFIED block above replaces the content.)
+
+## REMOVED Requirements
+
+None.
