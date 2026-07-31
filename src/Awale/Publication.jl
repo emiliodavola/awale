@@ -819,9 +819,10 @@ function release_model_card(
         final_loss = final_loss,
         selection_current_best_rate = selection_current_best_rate,
         selection_promoted = selection_promoted,
+        training_config = training_config,
     )
     println(io)
-    card_limitations(io)
+    card_limitations(io; training_config = training_config)
     println(io)
     card_bundle_contents(io, artifact_specs)
     println(io)
@@ -928,12 +929,33 @@ function card_training_details(io::IO; training_config::Dict{String,Any}, last_i
 end
 
 """
-    card_evaluation(io; best_selection_score, baseline_win_rate, final_loss, selection_current_best_rate, selection_promoted)
+    config_budget(training_config, section, key, fallback) -> Real
 
-Write the `## Evaluation` section: methodology (RandomAgent baseline, 400 MCTS
-simulations, 100 evaluation games, 56% promotion gate over 200 games), the rounded
-metrics, and the per-checkpoint promotion narrative derived from the optional
-`selection_promoted` flag. A global flag line is never printed.
+Read a numeric budget (e.g. MCTS simulations, evaluation games, promotion
+threshold) from the bundled training configuration. Returns `fallback` when the
+section or key is missing or holds a non-numeric value, so the card renders the
+documented defaults for older bundles without config snapshots.
+"""
+function config_budget(
+    training_config::AbstractDict,
+    section::AbstractString,
+    key::AbstractString,
+    fallback::Real,
+)::Real
+    section_dict = get(training_config, section, nothing)
+    section_dict isa AbstractDict || return fallback
+    value = get(section_dict, key, fallback)
+    return value isa Real ? value : fallback
+end
+
+"""
+    card_evaluation(io; best_selection_score, baseline_win_rate, final_loss, selection_current_best_rate, selection_promoted, training_config)
+
+Write the `## Evaluation` section: methodology (RandomAgent baseline, MCTS
+simulations, evaluation games, promotion gate), the rounded metrics, and the
+per-checkpoint promotion narrative derived from the optional `selection_promoted`
+flag. Budgets are read from the bundled training configuration with documented
+fallbacks. A global flag line is never printed.
 """
 function card_evaluation(
     io::IO;
@@ -942,11 +964,17 @@ function card_evaluation(
     final_loss::Real,
     selection_current_best_rate::Union{Nothing,Real},
     selection_promoted::Union{Nothing,Bool},
+    training_config::Dict{String,Any} = Dict{String,Any}(),
 )
+    sims_per_eval = config_budget(training_config, "evaluation", "sims_per_eval", 400)
+    eval_games = config_budget(training_config, "evaluation", "eval_games", 100)
+    promotion_games = config_budget(training_config, "selection", "promotion_games", 200)
+    promotion_threshold =
+        config_budget(training_config, "selection", "promotion_threshold", 56.0)
     println(io, "## Evaluation")
     println(
         io,
-        "Evaluation pits the trained network against a RandomAgent baseline with 400 MCTS simulations per move over 100 evaluation games. A checkpoint is promoted only when it reaches a decided win rate of at least 56% over 200 promotion games against the current best.",
+        "Evaluation pits the trained network against a RandomAgent baseline with $(format_metric(sims_per_eval)) MCTS simulations per move over $(format_metric(eval_games)) evaluation games. A checkpoint is promoted only when it reaches a decided win rate of at least $(format_metric(promotion_threshold))% over $(format_metric(promotion_games)) promotion games against the current best.",
     )
     println(io)
     println(io, "Metrics:")
@@ -974,11 +1002,12 @@ function card_evaluation(
 end
 
 """
-    card_limitations(io)
+    card_limitations(io; training_config)
 
 Write the `## Limitations` section.
 """
-function card_limitations(io::IO)
+function card_limitations(io::IO; training_config::Dict{String,Any} = Dict{String,Any}())
+    sims_per_eval = config_budget(training_config, "evaluation", "sims_per_eval", 400)
     println(io, "## Limitations")
     println(
         io,
@@ -990,7 +1019,7 @@ function card_limitations(io::IO)
     )
     println(
         io,
-        "- Evaluation reflects the fixed RandomAgent baseline and the 400-simulation search budget.",
+        "- Evaluation reflects the fixed RandomAgent baseline and the $(format_metric(sims_per_eval))-simulation search budget.",
     )
 end
 

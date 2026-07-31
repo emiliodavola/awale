@@ -583,6 +583,38 @@ end
         @test occursin("last_iter = 300", card)
     end
 
+    @testset "card evaluation reads budgets from the bundled config" begin
+        budgets = Dict{String,Any}(
+            "evaluation" => Dict{String,Any}(
+                "sims_per_eval" => 100,
+                "eval_games" => 50,
+            ),
+            "selection" => Dict{String,Any}(
+                "promotion_threshold" => 60.0,
+                "promotion_games" => 150,
+            ),
+        )
+        card = Awale.Publication.release_model_card(
+            synthetic_summary(),
+            Dict{String,String}("release_summary.toml" => "s");
+            bundle_kind = "local_trusted",
+            model_export_format = "serialization",
+            training_config = budgets,
+        )
+        @test occursin("with 100 MCTS simulations per move over 50 evaluation games", card)
+        @test occursin("at least 60% over 150 promotion games", card)
+        @test occursin("100-simulation search budget", card)
+
+        card = Awale.Publication.release_model_card(
+            synthetic_summary(),
+            Dict{String,String}("release_summary.toml" => "s");
+            bundle_kind = "local_trusted",
+            model_export_format = "serialization",
+        )
+        @test occursin("with 400 MCTS simulations per move over 100 evaluation games", card)
+        @test occursin("at least 56% over 200 promotion games", card)
+    end
+
     @testset "read_bundle_configs parses bundle config TOMLs defensively" begin
         mktempdir() do root_dir
             empty_bundle = joinpath(root_dir, "empty")
