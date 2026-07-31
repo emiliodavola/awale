@@ -254,9 +254,10 @@ end
 
 Derive the public-facing parameter count for a staged bundle. For Float32
 exports each parameter occupies 4 bytes, so the count is
-`filesize(artifacts/model_best.f32) ÷ 4`. For other export formats the count is
-computed from the bundled `artifacts/model_config.toml`. Returns `nothing` when
-neither source is available.
+`filesize(artifacts/model_best.f32) ÷ 4`; a size that is not a multiple of 4
+indicates a truncated or corrupt payload and yields `nothing`. For other export
+formats the count is computed from the bundled `artifacts/model_config.toml`.
+Returns `nothing` when neither source is available.
 """
 function public_model_parameter_count(
     bundle_dir::AbstractString;
@@ -265,7 +266,9 @@ function public_model_parameter_count(
     if String(model_export_format) == "float32"
         model_file = joinpath(String(bundle_dir), "artifacts", "model_best.f32")
         isfile(model_file) || return nothing
-        return filesize(model_file) ÷ 4
+        bytes = filesize(model_file)
+        (bytes >= 4 && iszero(bytes % 4)) || return nothing
+        return bytes ÷ 4
     end
 
     config_path = joinpath(String(bundle_dir), "artifacts", "model_config.toml")

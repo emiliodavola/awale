@@ -362,7 +362,10 @@ end
             @test Awale.Publication.public_model_parameter_count(bundle_dir; model_export_format="float32") == 31559
 
             write(joinpath(bundle_dir, "artifacts", "model_best.f32"), zeros(UInt8, 10))
-            @test Awale.Publication.public_model_parameter_count(bundle_dir; model_export_format="float32") == 2
+            @test Awale.Publication.public_model_parameter_count(bundle_dir; model_export_format="float32") == nothing
+
+            write(joinpath(bundle_dir, "artifacts", "model_best.f32"), zeros(UInt8, 0))
+            @test Awale.Publication.public_model_parameter_count(bundle_dir; model_export_format="float32") == nothing
 
             cp(
                 joinpath(@__DIR__, "..", "src", "Awale", "config.toml"),
