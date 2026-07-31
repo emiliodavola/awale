@@ -77,6 +77,30 @@ function seed_release_inputs(
     return summary_path
 end
 
+# Minimal summary fixture WITHOUT a [paths] section: the card render must not
+# depend on path metadata (paths live in the manifest, not the public card).
+function synthetic_summary(;
+    release_id::AbstractString = "20260719_120000",
+    architecture::AbstractString = "mlp",
+)
+    return Dict{String,Any}(
+        "run" => Dict{String,Any}(
+            "commit_sha" => "abc123",
+            "architecture" => String(architecture),
+            "release_id" => String(release_id),
+            "timestamp" => "2026-07-19T12:00:00",
+            "checkpoint_dir" => "checkpoints/mlp",
+        ),
+        "metrics" => Dict{String,Any}(
+            "last_iter" => 300,
+            "best_selection_score" => 62.5,
+            "baseline_win_rate" => 71.0,
+            "final_loss" => 0.42,
+            "selection_promoted" => true,
+        ),
+    )
+end
+
 @testset "Hugging Face publication flow" begin
     @testset "release summary round-trips and bundles cleanly" begin
         mktempdir() do root_dir
@@ -459,6 +483,32 @@ end
         @test Awale.Publication.format_metric(Inf) == "n/a"
         @test Awale.Publication.format_metric(-Inf) == "n/a"
         @test Awale.Publication.format_metric(NaN) == "n/a"
+    end
+
+    @testset "release_model_card degrades gracefully without [paths] and drops the model_config kwarg" begin
+        summary = synthetic_summary()
+        specs = Dict{String,String}("release_summary.toml" => "s")
+
+        # the render must no longer accept the dead model_config kwarg
+        @test_throws MethodError Awale.Publication.release_model_card(
+            summary,
+            specs;
+            bundle_kind = "local_trusted",
+            model_export_format = "serialization",
+            model_config = Dict{String,Any}(),
+        )
+
+        # a summary without [paths] must still render (paths are not card data)
+        card = Awale.Publication.release_model_card(
+            summary,
+            specs;
+            bundle_kind = "local_trusted",
+            model_export_format = "serialization",
+        )
+        @test occursin("## Release", card)
+        @test occursin("## Model Details", card)
+        @test occursin("## Evaluation", card)
+        @test occursin("## Bundle contents", card)
     end
 
     @testset "read_bundle_configs parses bundle config TOMLs defensively" begin

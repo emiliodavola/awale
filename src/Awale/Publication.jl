@@ -313,12 +313,12 @@ stable model name and rounded metric values (via `format_metric`) so the body
 and the YAML can never drift.
 """
 function write_model_card_front_matter(io::IO, summary::Dict{String,Any})
-    sections = release_summary_sections(summary)
-    best_selection_score = sections.metrics["best_selection_score"]
-    baseline_win_rate = sections.metrics["baseline_win_rate"]
-    final_loss = sections.metrics["final_loss"]
+    metrics = summary["metrics"]
+    best_selection_score = metrics["best_selection_score"]
+    baseline_win_rate = metrics["baseline_win_rate"]
+    final_loss = metrics["final_loss"]
     selection_current_best_rate =
-        get(sections.metrics, "selection_current_best_rate", nothing)
+        get(metrics, "selection_current_best_rate", nothing)
 
     println(io, "---")
     println(io, "license: mit")
@@ -738,12 +738,13 @@ function read_release_summary(path::AbstractString)::Dict{String,Any}
 end
 
 """
-    release_model_card(summary, artifact_specs; bundle_kind, model_export_format, training_config, model_config, model_params) -> String
+    release_model_card(summary, artifact_specs; bundle_kind, model_export_format, training_config, model_params) -> String
 
 Generate the full text of a Hugging Face model card (README.md) from a release summary
-and artifact specifications. Pure render: bundle configs and the public parameter
-count are passed in by the caller; their defaults keep older releases rendering
-defensively without the new config files.
+and artifact specifications. Pure render: the bundled training configuration and the
+public parameter count are passed in by the caller; their defaults keep older releases
+rendering defensively without the new config files. Only the `run` and `metrics`
+summary sections are read — `paths` metadata lives in the manifest, never the card.
 """
 function release_model_card(
     summary::Dict{String,Any},
@@ -751,28 +752,21 @@ function release_model_card(
     bundle_kind::AbstractString,
     model_export_format::AbstractString,
     training_config::Dict{String,Any} = Dict{String,Any}(),
-    model_config::Dict{String,Any} = Dict{String,Any}(),
     model_params::Union{Int,Nothing} = nothing,
 )::String
-    sections = release_summary_sections(summary)
-    release_id = String(sections.run["release_id"])
-    architecture = String(sections.run["architecture"])
-    commit_sha = String(sections.run["commit_sha"])
-    timestamp = String(sections.run["timestamp"])
-    checkpoint_dir = String(sections.run["checkpoint_dir"])
-    runtime_config_snapshot = String(sections.paths["runtime_config_snapshot"])
-    model_config_snapshot = String(sections.paths["model_config_snapshot"])
-    training_state_path = String(sections.paths["training_state_path"])
-    last_checkpoint_path = String(sections.paths["last_checkpoint_path"])
-    best_checkpoint_path = String(sections.paths["best_checkpoint_path"])
-    final_checkpoint_path = String(sections.paths["final_checkpoint_path"])
-    last_iter = sections.metrics["last_iter"]
-    best_selection_score = sections.metrics["best_selection_score"]
-    baseline_win_rate = sections.metrics["baseline_win_rate"]
-    final_loss = sections.metrics["final_loss"]
+    run = summary["run"]
+    metrics = summary["metrics"]
+    release_id = String(run["release_id"])
+    architecture = String(run["architecture"])
+    commit_sha = String(run["commit_sha"])
+    timestamp = String(run["timestamp"])
+    last_iter = metrics["last_iter"]
+    best_selection_score = metrics["best_selection_score"]
+    baseline_win_rate = metrics["baseline_win_rate"]
+    final_loss = metrics["final_loss"]
     selection_current_best_rate =
-        get(sections.metrics, "selection_current_best_rate", nothing)
-    selection_promoted = get(sections.metrics, "selection_promoted", nothing)
+        get(metrics, "selection_current_best_rate", nothing)
+    selection_promoted = get(metrics, "selection_promoted", nothing)
 
     io = IOBuffer()
     write_model_card_front_matter(io, summary)
@@ -1063,11 +1057,11 @@ function card_citation(io::IO)
 end
 
 """
-    write_release_model_card(bundle_dir, summary, artifact_specs; bundle_kind, model_export_format, training_config, model_config, model_params) -> String
+    write_release_model_card(bundle_dir, summary, artifact_specs; bundle_kind, model_export_format, training_config, model_params) -> String
 
 Atomically write a model card README.md to `bundle_dir` using the release summary.
-`training_config`, `model_config`, and `model_params` are caller-resolved bundle
-data (no IO happens inside the render); their defaults keep older callers working.
+`training_config` and `model_params` are caller-resolved bundle data (no IO happens
+inside the render); their defaults keep older callers working.
 """
 function write_release_model_card(
     bundle_dir::AbstractString,
@@ -1076,7 +1070,6 @@ function write_release_model_card(
     bundle_kind::AbstractString,
     model_export_format::AbstractString,
     training_config::Dict{String,Any} = Dict{String,Any}(),
-    model_config::Dict{String,Any} = Dict{String,Any}(),
     model_params::Union{Int,Nothing} = nothing,
 )::String
     path = release_model_card_path(bundle_dir)
@@ -1089,7 +1082,6 @@ function write_release_model_card(
                 bundle_kind = bundle_kind,
                 model_export_format = model_export_format,
                 training_config = training_config,
-                model_config = model_config,
                 model_params = model_params,
             ),
         )
@@ -1371,7 +1363,7 @@ function write_release_bundle(
     bundle_kind::AbstractString,
     model_export_format::AbstractString,
 )
-    training_config, model_config = read_bundle_configs(bundle_dir)
+    training_config, _ = read_bundle_configs(bundle_dir)
     model_params =
         public_model_parameter_count(bundle_dir; model_export_format = model_export_format)
     write_release_model_card(
@@ -1381,7 +1373,6 @@ function write_release_bundle(
         bundle_kind = bundle_kind,
         model_export_format = model_export_format,
         training_config = training_config,
-        model_config = model_config,
         model_params = model_params,
     )
     atomic_write(joinpath(bundle_dir, MANIFEST_FILE)) do io
