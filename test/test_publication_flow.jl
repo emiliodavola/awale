@@ -455,6 +455,12 @@ end
         @test Awale.Publication.format_metric(1.2345) == "1.234"
     end
 
+    @testset "format_metric renders non-finite values as a safe placeholder" begin
+        @test Awale.Publication.format_metric(Inf) == "n/a"
+        @test Awale.Publication.format_metric(-Inf) == "n/a"
+        @test Awale.Publication.format_metric(NaN) == "n/a"
+    end
+
     @testset "read_bundle_configs parses bundle config TOMLs defensively" begin
         mktempdir() do root_dir
             empty_bundle = joinpath(root_dir, "empty")

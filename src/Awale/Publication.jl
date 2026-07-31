@@ -176,9 +176,13 @@ Round a metric value to 4 significant digits and strip trailing zeros so the
 card body and the YAML `model-index` always agree on a compact representation
 (e.g. `61.702127659574465 -> "61.7"`, `71.0 -> "71"`, `0.42 -> "0.42"`).
 Scientific notation keeps its exponent digits intact (`1.0e-10 -> "1e-10"`).
+Non-finite values (`Inf`, `NaN`) render as `"n/a"` so the YAML `model-index`
+never emits invalid floats and the body stays in agreement.
 """
 function format_metric(x::Real)::String
-    rounded = string(round(Float64(x); sigdigits = 4))
+    value = Float64(x)
+    isfinite(value) || return "n/a"
+    rounded = string(round(value; sigdigits = 4))
     parts = split(rounded, 'e')
     mantissa = parts[1]
     occursin('.', mantissa) || return rounded
