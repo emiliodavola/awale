@@ -217,11 +217,13 @@ Sum the trainable parameters described by a parsed model configuration:
 Dense layers contribute `in*out + out`, Conv layers `prod(kernel)*in*out + out`,
 and parameterless layers (Reshape, MaxPool, Flatten, ...) are skipped. When the
 config carries `variants`, the active variant is resolved through `architecture`.
-Never throws: any type mismatch, conversion failure, or missing required layer
-stack (shared/policy/value) resolves to `nothing`.
+Never throws: a non-dictionary argument, any type mismatch or conversion failure,
+or a missing or empty required layer stack (shared/policy/value) resolves to
+`nothing`.
 """
-function model_parameter_count(model_config::Dict)::Union{Int,Nothing}
+function model_parameter_count(model_config)::Union{Int,Nothing}
     try
+        model_config isa AbstractDict || return nothing
         cfg = haskey(model_config, "model") ? model_config["model"] : model_config
         cfg isa AbstractDict || return nothing
 
@@ -242,6 +244,7 @@ function model_parameter_count(model_config::Dict)::Union{Int,Nothing}
         for stack in ("shared", "policy", "value")
             stack_layers = get(layers, stack, nothing)
             stack_layers isa AbstractVector || return nothing
+            isempty(stack_layers) && return nothing
             for layer in stack_layers
                 layer isa AbstractDict || continue
                 layer_type = get(layer, "type", nothing)

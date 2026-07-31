@@ -408,6 +408,24 @@ end
                 ),
             ),
         ) == nothing
+
+        # a present-but-empty layer stack cannot resolve to a complete model
+        # either: returns nothing, never a partial sum over the remaining stacks
+        @test Awale.Publication.model_parameter_count(
+            Dict{String,Any}(
+                "layers" => Dict{String,Any}(
+                    "shared" => Any[],
+                    "policy" => [Dict{String,Any}("type" => "Dense", "in" => 128, "out" => 6)],
+                    "value" => [Dict{String,Any}("type" => "Dense", "in" => 128, "out" => 1)],
+                ),
+            ),
+        ) == nothing
+
+        # non-dictionary arguments (scalar, string, array — e.g. a TOML file
+        # that parses to a non-table) resolve to nothing, never a MethodError
+        @test Awale.Publication.model_parameter_count(42) == nothing
+        @test Awale.Publication.model_parameter_count("not a config") == nothing
+        @test Awale.Publication.model_parameter_count([1, 2, 3]) == nothing
     end
 
     @testset "public_model_parameter_count derives parameter counts from the bundle" begin
