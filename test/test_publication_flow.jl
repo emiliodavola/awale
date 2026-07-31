@@ -361,6 +361,53 @@ end
                 ),
             ),
         ) == nothing
+
+        # wrong-typed or unresolvable configs must return nothing, never throw
+        @test Awale.Publication.model_parameter_count(
+            Dict{String,Any}(
+                "model" => Dict{String,Any}(
+                    "architecture" => "mlp",
+                    "variants" => "not-a-dict",
+                ),
+            ),
+        ) == nothing
+        @test Awale.Publication.model_parameter_count(
+            Dict{String,Any}(
+                "model" => Dict{String,Any}(
+                    "architecture" => 3,
+                    "variants" => Dict{String,Any}("3" => Dict{String,Any}()),
+                ),
+            ),
+        ) == nothing
+        @test Awale.Publication.model_parameter_count(
+            Dict{String,Any}(
+                "layers" => Dict{String,Any}(
+                    "shared" => [Dict{String,Any}("type" => "Conv", "kernel" => [3, "x"], "in" => 1, "out" => 8)],
+                    "policy" => [Dict{String,Any}("type" => "Dense", "in" => 16, "out" => 6)],
+                    "value" => [Dict{String,Any}("type" => "Dense", "in" => 16, "out" => 1)],
+                ),
+            ),
+        ) == nothing
+        @test Awale.Publication.model_parameter_count(
+            Dict{String,Any}(
+                "layers" => Dict{String,Any}(
+                    "shared" => [Dict{String,Any}("type" => "Dense", "in" => "abc", "out" => 128)],
+                    "policy" => [Dict{String,Any}("type" => "Dense", "in" => 128, "out" => 6)],
+                    "value" => [Dict{String,Any}("type" => "Dense", "in" => 128, "out" => 1)],
+                ),
+            ),
+        ) == nothing
+
+        # a config missing a required layer stack cannot resolve to a complete
+        # model: returns nothing rather than a partial sum
+        @test Awale.Publication.model_parameter_count(
+            Dict{String,Any}(
+                "layers" => Dict{String,Any}(
+                    "shared" => [Dict{String,Any}("type" => "Dense", "in" => 48, "out" => 128)],
+                    "policy" => [Dict{String,Any}("type" => "Dense", "in" => 128, "out" => 6)],
+                ),
+            ),
+        ) == nothing
     end
 
     @testset "public_model_parameter_count derives parameter counts from the bundle" begin

@@ -217,41 +217,50 @@ Sum the trainable parameters described by a parsed model configuration:
 Dense layers contribute `in*out + out`, Conv layers `prod(kernel)*in*out + out`,
 and parameterless layers (Reshape, MaxPool, Flatten, ...) are skipped. When the
 config carries `variants`, the active variant is resolved through `architecture`.
-Returns `nothing` for configurations that cannot be resolved.
+Never throws: any type mismatch, conversion failure, or missing required layer
+stack (shared/policy/value) resolves to `nothing`.
 """
 function model_parameter_count(model_config::Dict)::Union{Int,Nothing}
-    cfg = haskey(model_config, "model") ? model_config["model"] : model_config
-    cfg isa AbstractDict || return nothing
+    try
+        cfg = haskey(model_config, "model") ? model_config["model"] : model_config
+        cfg isa AbstractDict || return nothing
 
-    if haskey(cfg, "variants") && haskey(cfg, "architecture")
-        variant = get(cfg["variants"], String(cfg["architecture"]), nothing)
-        variant isa AbstractDict || return nothing
-        cfg = variant
-    end
+        if haskey(cfg, "variants")
+            haskey(cfg, "architecture") || return nothing
+            cfg["architecture"] isa AbstractString || return nothing
+            variants = cfg["variants"]
+            variants isa AbstractDict || return nothing
+            variant = get(variants, String(cfg["architecture"]), nothing)
+            variant isa AbstractDict || return nothing
+            cfg = variant
+        end
 
-    layers = get(cfg, "layers", nothing)
-    layers isa AbstractDict || return nothing
+        layers = get(cfg, "layers", nothing)
+        layers isa AbstractDict || return nothing
 
-    total = 0
-    for stack in ("shared", "policy", "value")
-        stack_layers = get(layers, stack, nothing)
-        stack_layers isa AbstractVector || return nothing
-        for layer in stack_layers
-            layer isa AbstractDict || continue
-            layer_type = get(layer, "type", nothing)
-            if layer_type == "Dense"
-                haskey(layer, "in") && haskey(layer, "out") || return nothing
-                total += Int(layer["in"]) * Int(layer["out"]) + Int(layer["out"])
-            elseif layer_type == "Conv"
-                kernel = get(layer, "kernel", nothing)
-                haskey(layer, "in") && haskey(layer, "out") && kernel !== nothing ||
-                    return nothing
-                total += prod(Int.(kernel)) * Int(layer["in"]) * Int(layer["out"]) +
-                         Int(layer["out"])
+        total = 0
+        for stack in ("shared", "policy", "value")
+            stack_layers = get(layers, stack, nothing)
+            stack_layers isa AbstractVector || return nothing
+            for layer in stack_layers
+                layer isa AbstractDict || continue
+                layer_type = get(layer, "type", nothing)
+                if layer_type == "Dense"
+                    haskey(layer, "in") && haskey(layer, "out") || return nothing
+                    total += Int(layer["in"]) * Int(layer["out"]) + Int(layer["out"])
+                elseif layer_type == "Conv"
+                    kernel = get(layer, "kernel", nothing)
+                    haskey(layer, "in") && haskey(layer, "out") && kernel !== nothing ||
+                        return nothing
+                    total += prod(Int.(kernel)) * Int(layer["in"]) * Int(layer["out"]) +
+                             Int(layer["out"])
+                end
             end
         end
+        return total
+    catch
+        return nothing
     end
-    return total
 end
 
 """
