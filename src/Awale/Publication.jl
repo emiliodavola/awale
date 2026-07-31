@@ -193,6 +193,23 @@ function format_metric(x::Real)::String
 end
 
 """
+    markdown_inline_escape(value) -> String
+
+Sanitize a summary- or config-derived value before it is interpolated into the
+model card: newlines and carriage returns collapse to spaces (a raw newline
+could break the card structure or inject headings/list items), and backticks and
+backslashes are escaped so they cannot terminate a code span or smuggle in
+markdown. Accepts any value (booleans, numbers, tables) and converts via
+`string()` so config flags of any TOML type are safe.
+"""
+function markdown_inline_escape(value)::String
+    escaped = replace(string(value), "\r\n" => " ", '\r' => ' ', '\n' => ' ')
+    escaped = replace(escaped, '\\' => "\\\\")
+    escaped = replace(escaped, '`' => "\\`")
+    return escaped
+end
+
+"""
     read_bundle_configs(bundle_dir) -> (training_config, model_config)
 
 Parse the bundled `artifacts/training_config.toml` and `artifacts/model_config.toml`
@@ -778,9 +795,9 @@ function release_model_card(
     )
     println(io)
     println(io, "## Release")
-    println(io, "- Release ID: $release_id")
-    println(io, "- Commit SHA: $commit_sha")
-    println(io, "- Timestamp: $timestamp")
+    println(io, "- Release ID: $(markdown_inline_escape(release_id))")
+    println(io, "- Commit SHA: $(markdown_inline_escape(commit_sha))")
+    println(io, "- Timestamp: $(markdown_inline_escape(timestamp))")
     println(io, "- Bundle kind: $(bundle_kind)")
     println(io, "- Model export format: $(model_export_format)")
     println(io)
@@ -827,7 +844,7 @@ function card_model_details(
     timestamp::AbstractString,
 )
     println(io, "## Model Details")
-    println(io, "- Architecture: $architecture")
+    println(io, "- Architecture: $(markdown_inline_escape(architecture))")
     param_count = model_params === nothing ? "not recorded" : string(model_params)
     println(io, "- Parameter count: $param_count")
     println(io, "- Framework: Julia with Flux.jl")
@@ -840,7 +857,7 @@ function card_model_details(
         "- Outputs: policy logits for 6 local actions and a scalar value in [-1, 1]",
     )
     println(io, "- License: MIT")
-    println(io, "- Release date: $timestamp")
+    println(io, "- Release date: $(markdown_inline_escape(timestamp))")
 end
 
 """
@@ -884,7 +901,10 @@ function card_training_details(io::IO; training_config::Dict{String,Any}, last_i
         println(io, "No bundled training configuration was recorded for this release.")
     else
         training_flag = get(training_config, "training", "n/a")
-        println(io, "Bundled training configuration: `training = $training_flag`.")
+        println(
+            io,
+            "Bundled training configuration: `training = $(markdown_inline_escape(training_flag))`.",
+        )
     end
 end
 

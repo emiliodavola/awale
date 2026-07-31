@@ -511,6 +511,35 @@ end
         @test occursin("## Bundle contents", card)
     end
 
+    @testset "markdown_inline_escape sanitizes card-interpolated strings" begin
+        @test Awale.Publication.markdown_inline_escape("a\nb") == "a b"
+        @test Awale.Publication.markdown_inline_escape("a\r\nb") == "a b"
+        @test Awale.Publication.markdown_inline_escape("a`b") == "a\\`b"
+        @test Awale.Publication.markdown_inline_escape("a\\b") == "a\\\\b"
+
+        evil_arch = "foo\n## Fake"
+        card = Awale.Publication.release_model_card(
+            synthetic_summary(architecture = evil_arch),
+            Dict{String,String}("release_summary.toml" => "s");
+            bundle_kind = "local_trusted",
+            model_export_format = "serialization",
+        )
+        @test occursin("Architecture: foo ## Fake", card)
+        @test !occursin("\n## Fake", card)
+
+        card = Awale.Publication.release_model_card(
+            synthetic_summary(release_id = "rel_1\n[evil]"),
+            Dict{String,String}("release_summary.toml" => "s");
+            bundle_kind = "local_trusted",
+            model_export_format = "serialization",
+            training_config = Dict{String,Any}("training" => "back`tick"),
+        )
+        @test occursin("Release ID: rel_1 [evil]", card)
+        @test !occursin("\n[evil]", card)
+        @test occursin("back\\`tick", card)
+        @test !occursin("back`tick", card)
+    end
+
     @testset "read_bundle_configs parses bundle config TOMLs defensively" begin
         mktempdir() do root_dir
             empty_bundle = joinpath(root_dir, "empty")
