@@ -36,6 +36,7 @@ const MANIFEST_FILE = "manifest.toml"
 const RELEASE_SUMMARY_FILE = "release_summary.toml"
 const MODEL_CARD_FILE = "README.md"
 const MODEL_CARD_GENERATOR_VERSION = 2
+const CARD_MODEL_NAME = "Awale AlphaZero-like"
 const PUBLIC_MODEL_FILE_EXT = ".f32"
 const DEFAULT_ROOT_DIR = abspath(joinpath(@__DIR__, "..", ".."))
 
@@ -302,11 +303,12 @@ end
     write_model_card_front_matter(io::IO, summary::Dict{String, Any})
 
 Write YAML front-matter for a Hugging Face model card to `io`, extracting
-metrics and metadata from the release summary.
+metrics and metadata from the release summary. The `model-index` uses the
+stable model name and rounded metric values (via `format_metric`) so the body
+and the YAML can never drift.
 """
 function write_model_card_front_matter(io::IO, summary::Dict{String,Any})
     sections = release_summary_sections(summary)
-    release_id = String(sections.run["release_id"])
     best_selection_score = sections.metrics["best_selection_score"]
     baseline_win_rate = sections.metrics["baseline_win_rate"]
     final_loss = sections.metrics["final_loss"]
@@ -317,11 +319,20 @@ function write_model_card_front_matter(io::IO, summary::Dict{String,Any})
     println(io, "license: mit")
     println(io, "library_name: flux")
     println(io, "tags:")
-    for tag in ("julia", "flux", "awale", "reinforcement-learning", "mcts")
+    for tag in (
+        "julia",
+        "flux",
+        "awale",
+        "reinforcement-learning",
+        "mcts",
+        "alphazero",
+        "self-play",
+        "board-game",
+    )
         println(io, "  - $tag")
     end
     println(io, "model-index:")
-    println(io, "  - name: Awale release $release_id")
+    println(io, "  - name: $CARD_MODEL_NAME")
     println(io, "    results:")
     println(io, "      - task:")
     println(io, "          type: custom")
@@ -332,17 +343,30 @@ function write_model_card_front_matter(io::IO, summary::Dict{String,Any})
     println(io, "        metrics:")
     println(io, "          - name: Best selection score")
     println(io, "            type: best_selection_score")
-    println(io, "            value: $best_selection_score")
+    println(io, "            value: $(format_metric(best_selection_score))")
+    println(
+        io,
+        "            description: Best-scoring checkpoint win rate during training selection.",
+    )
     println(io, "          - name: Baseline win rate")
     println(io, "            type: baseline_win_rate")
-    println(io, "            value: $baseline_win_rate")
+    println(io, "            value: $(format_metric(baseline_win_rate))")
+    println(
+        io,
+        "            description: Win rate of the best checkpoint against the RandomAgent baseline.",
+    )
     println(io, "          - name: Final loss")
     println(io, "            type: final_loss")
-    println(io, "            value: $final_loss")
+    println(io, "            value: $(format_metric(final_loss))")
+    println(io, "            description: Training loss of the final checkpoint.")
     if selection_current_best_rate !== nothing
         println(io, "          - name: Selection current best rate")
         println(io, "            type: selection_current_best_rate")
-        println(io, "            value: $selection_current_best_rate")
+        println(io, "            value: $(format_metric(selection_current_best_rate))")
+        println(
+            io,
+            "            description: Win rate of the best checkpoint against the current best at selection.",
+        )
     end
     println(io, "---")
     println(io)
