@@ -316,4 +316,65 @@ end
             @test length(model_cfg["model"]["variants"]["mlp"]["layers"]["shared"]) == 2
         end
     end
+
+    @testset "model_parameter_count sums Dense and Conv parameters" begin
+        config = TOML.parsefile(joinpath(@__DIR__, "..", "src", "Awale", "config.toml"))
+        @test Awale.Publication.model_parameter_count(config) == 31559
+
+        flat = Dict{String,Any}(
+            "layers" => Dict{String,Any}(
+                "shared" => [Dict{String,Any}("type" => "Dense", "in" => 48, "out" => 128)],
+                "policy" => [Dict{String,Any}("type" => "Dense", "in" => 128, "out" => 6)],
+                "value" => [Dict{String,Any}("type" => "Dense", "in" => 128, "out" => 1)],
+            ),
+        )
+        @test Awale.Publication.model_parameter_count(flat) == 48 * 128 + 128 + 128 * 6 + 6 + 128 + 1
+
+        conv = Dict{String,Any}(
+            "layers" => Dict{String,Any}(
+                "shared" => [
+                    Dict{String,Any}("type" => "Reshape", "shape" => [4, 12, 1]),
+                    Dict{String,Any}("type" => "Conv", "kernel" => [3, 3], "in" => 1, "out" => 8),
+                    Dict{String,Any}("type" => "MaxPool", "size" => [2, 2]),
+                    Dict{String,Any}("type" => "Flatten"),
+                ],
+                "policy" => [Dict{String,Any}("type" => "Dense", "in" => 16, "out" => 6)],
+                "value" => [Dict{String,Any}("type" => "Dense", "in" => 16, "out" => 1)],
+            ),
+        )
+        @test Awale.Publication.model_parameter_count(conv) == 3 * 3 * 1 * 8 + 8 + 16 * 6 + 6 + 16 + 1
+
+        @test Awale.Publication.model_parameter_count(Dict{String,Any}()) == nothing
+        @test Awale.Publication.model_parameter_count(
+            Dict{String,Any}(
+                "model" => Dict{String,Any}(
+                    "variants" => Dict{String,Any}("mlp" => Dict{String,Any}()),
+                ),
+            ),
+        ) == nothing
+    end
+
+    @testset "public_model_parameter_count derives parameter counts from the bundle" begin
+        mktempdir() do root_dir
+            bundle_dir = joinpath(root_dir, "bundle")
+            mkpath(joinpath(bundle_dir, "artifacts"))
+            write(joinpath(bundle_dir, "artifacts", "model_best.f32"), zeros(UInt8, 126236))
+            @test Awale.Publication.public_model_parameter_count(bundle_dir; model_export_format="float32") == 31559
+
+            write(joinpath(bundle_dir, "artifacts", "model_best.f32"), zeros(UInt8, 10))
+            @test Awale.Publication.public_model_parameter_count(bundle_dir; model_export_format="float32") == 2
+
+            cp(
+                joinpath(@__DIR__, "..", "src", "Awale", "config.toml"),
+                joinpath(bundle_dir, "artifacts", "model_config.toml"),
+            )
+            @test Awale.Publication.public_model_parameter_count(bundle_dir; model_export_format="serialization") == 31559
+
+            rm(joinpath(bundle_dir, "artifacts", "model_best.f32"))
+            @test Awale.Publication.public_model_parameter_count(bundle_dir; model_export_format="float32") == nothing
+
+            rm(joinpath(bundle_dir, "artifacts", "model_config.toml"))
+            @test Awale.Publication.public_model_parameter_count(bundle_dir; model_export_format="serialization") == nothing
+        end
+    end
 end

@@ -206,6 +206,79 @@ function read_bundle_configs(
 end
 
 """
+    model_parameter_count(model_config) -> Union{Int, Nothing}
+
+Sum the trainable parameters described by a parsed model configuration:
+Dense layers contribute `in*out + out`, Conv layers `prod(kernel)*in*out + out`,
+and parameterless layers (Reshape, MaxPool, Flatten, ...) are skipped. When the
+config carries `variants`, the active variant is resolved through `architecture`.
+Returns `nothing` for configurations that cannot be resolved.
+"""
+function model_parameter_count(model_config::Dict)::Union{Int,Nothing}
+    cfg = haskey(model_config, "model") ? model_config["model"] : model_config
+    cfg isa AbstractDict || return nothing
+
+    if haskey(cfg, "variants") && haskey(cfg, "architecture")
+        variant = get(cfg["variants"], String(cfg["architecture"]), nothing)
+        variant isa AbstractDict || return nothing
+        cfg = variant
+    end
+
+    layers = get(cfg, "layers", nothing)
+    layers isa AbstractDict || return nothing
+
+    total = 0
+    for stack in ("shared", "policy", "value")
+        stack_layers = get(layers, stack, nothing)
+        stack_layers isa AbstractVector || return nothing
+        for layer in stack_layers
+            layer isa AbstractDict || continue
+            layer_type = get(layer, "type", nothing)
+            if layer_type == "Dense"
+                haskey(layer, "in") && haskey(layer, "out") || return nothing
+                total += Int(layer["in"]) * Int(layer["out"]) + Int(layer["out"])
+            elseif layer_type == "Conv"
+                kernel = get(layer, "kernel", nothing)
+                haskey(layer, "in") && haskey(layer, "out") && kernel !== nothing ||
+                    return nothing
+                total += prod(Int.(kernel)) * Int(layer["in"]) * Int(layer["out"]) +
+                         Int(layer["out"])
+            end
+        end
+    end
+    return total
+end
+
+"""
+    public_model_parameter_count(bundle_dir; model_export_format) -> Union{Int, Nothing}
+
+Derive the public-facing parameter count for a staged bundle. For Float32
+exports each parameter occupies 4 bytes, so the count is
+`filesize(artifacts/model_best.f32) ÷ 4`. For other export formats the count is
+computed from the bundled `artifacts/model_config.toml`. Returns `nothing` when
+neither source is available.
+"""
+function public_model_parameter_count(
+    bundle_dir::AbstractString;
+    model_export_format::AbstractString,
+)::Union{Int,Nothing}
+    if String(model_export_format) == "float32"
+        model_file = joinpath(String(bundle_dir), "artifacts", "model_best.f32")
+        isfile(model_file) || return nothing
+        return filesize(model_file) ÷ 4
+    end
+
+    config_path = joinpath(String(bundle_dir), "artifacts", "model_config.toml")
+    isfile(config_path) || return nothing
+    config = try
+        TOML.parsefile(config_path)
+    catch
+        return nothing
+    end
+    return model_parameter_count(config)
+end
+
+"""
     write_model_card_front_matter(io::IO, summary::Dict{String, Any})
 
 Write YAML front-matter for a Hugging Face model card to `io`, extracting
