@@ -35,7 +35,8 @@ const ARTIFACT_SUBDIR = "artifacts"
 const MANIFEST_FILE = "manifest.toml"
 const RELEASE_SUMMARY_FILE = "release_summary.toml"
 const MODEL_CARD_FILE = "README.md"
-const MODEL_CARD_GENERATOR_VERSION = 2
+const MODEL_CARD_GENERATOR_VERSION = 3
+const CARD_MODEL_NAME = "Awale AlphaZero-like"
 const PUBLIC_MODEL_FILE_EXT = ".f32"
 const DEFAULT_ROOT_DIR = abspath(joinpath(@__DIR__, "..", ".."))
 
@@ -175,9 +176,13 @@ Round a metric value to 4 significant digits and strip trailing zeros so the
 card body and the YAML `model-index` always agree on a compact representation
 (e.g. `61.702127659574465 -> "61.7"`, `71.0 -> "71"`, `0.42 -> "0.42"`).
 Scientific notation keeps its exponent digits intact (`1.0e-10 -> "1e-10"`).
+Non-finite values (`Inf`, `NaN`) render as `"n/a"` so the YAML `model-index`
+never emits invalid floats and the body stays in agreement.
 """
 function format_metric(x::Real)::String
-    rounded = string(round(Float64(x); sigdigits = 4))
+    value = Float64(x)
+    isfinite(value) || return "n/a"
+    rounded = string(round(value; sigdigits = 4))
     parts = split(rounded, 'e')
     mantissa = parts[1]
     occursin('.', mantissa) || return rounded
@@ -185,6 +190,23 @@ function format_metric(x::Real)::String
     stripped = rstrip(stripped, '.')
     stripped == "-0" && (stripped = "0")
     return length(parts) == 1 ? stripped : stripped * "e" * parts[2]
+end
+
+"""
+    markdown_inline_escape(value) -> String
+
+Sanitize a summary- or config-derived value before it is interpolated into the
+model card: newlines and carriage returns collapse to spaces (a raw newline
+could break the card structure or inject headings/list items), and backticks and
+backslashes are escaped so they cannot terminate a code span or smuggle in
+markdown. Accepts any value (booleans, numbers, tables) and converts via
+`string()` so config flags of any TOML type are safe.
+"""
+function markdown_inline_escape(value)::String
+    escaped = replace(string(value), "\r\n" => " ", '\r' => ' ', '\n' => ' ')
+    escaped = replace(escaped, '\\' => "\\\\")
+    escaped = replace(escaped, '`' => "\\`")
+    return escaped
 end
 
 """
@@ -217,11 +239,13 @@ Sum the trainable parameters described by a parsed model configuration:
 Dense layers contribute `in*out + out`, Conv layers `prod(kernel)*in*out + out`,
 and parameterless layers (Reshape, MaxPool, Flatten, ...) are skipped. When the
 config carries `variants`, the active variant is resolved through `architecture`.
-Never throws: any type mismatch, conversion failure, or missing required layer
-stack (shared/policy/value) resolves to `nothing`.
+Never throws: a non-dictionary argument, any type mismatch or conversion failure,
+or a missing or empty required layer stack (shared/policy/value) resolves to
+`nothing`.
 """
-function model_parameter_count(model_config::Dict)::Union{Int,Nothing}
+function model_parameter_count(model_config)::Union{Int,Nothing}
     try
+        model_config isa AbstractDict || return nothing
         cfg = haskey(model_config, "model") ? model_config["model"] : model_config
         cfg isa AbstractDict || return nothing
 
@@ -242,6 +266,7 @@ function model_parameter_count(model_config::Dict)::Union{Int,Nothing}
         for stack in ("shared", "policy", "value")
             stack_layers = get(layers, stack, nothing)
             stack_layers isa AbstractVector || return nothing
+            isempty(stack_layers) && return nothing
             for layer in stack_layers
                 layer isa AbstractDict || continue
                 layer_type = get(layer, "type", nothing)
@@ -252,8 +277,9 @@ function model_parameter_count(model_config::Dict)::Union{Int,Nothing}
                     kernel = get(layer, "kernel", nothing)
                     haskey(layer, "in") && haskey(layer, "out") && kernel !== nothing ||
                         return nothing
-                    total += prod(Int.(kernel)) * Int(layer["in"]) * Int(layer["out"]) +
-                             Int(layer["out"])
+                    total +=
+                        prod(Int.(kernel)) * Int(layer["in"]) * Int(layer["out"]) +
+                        Int(layer["out"])
                 end
             end
         end
@@ -299,26 +325,35 @@ end
     write_model_card_front_matter(io::IO, summary::Dict{String, Any})
 
 Write YAML front-matter for a Hugging Face model card to `io`, extracting
-metrics and metadata from the release summary.
+metrics and metadata from the release summary. The `model-index` uses the
+stable model name and rounded metric values (via `format_metric`) so the body
+and the YAML can never drift.
 """
 function write_model_card_front_matter(io::IO, summary::Dict{String,Any})
-    sections = release_summary_sections(summary)
-    release_id = String(sections.run["release_id"])
-    best_selection_score = sections.metrics["best_selection_score"]
-    baseline_win_rate = sections.metrics["baseline_win_rate"]
-    final_loss = sections.metrics["final_loss"]
-    selection_current_best_rate =
-        get(sections.metrics, "selection_current_best_rate", nothing)
+    metrics = summary["metrics"]
+    best_selection_score = metrics["best_selection_score"]
+    baseline_win_rate = metrics["baseline_win_rate"]
+    final_loss = metrics["final_loss"]
+    selection_current_best_rate = get(metrics, "selection_current_best_rate", nothing)
 
     println(io, "---")
     println(io, "license: mit")
     println(io, "library_name: flux")
     println(io, "tags:")
-    for tag in ("julia", "flux", "awale", "reinforcement-learning", "mcts")
+    for tag in (
+        "julia",
+        "flux",
+        "awale",
+        "reinforcement-learning",
+        "mcts",
+        "alphazero",
+        "self-play",
+        "board-game",
+    )
         println(io, "  - $tag")
     end
     println(io, "model-index:")
-    println(io, "  - name: Awale release $release_id")
+    println(io, "  - name: $CARD_MODEL_NAME")
     println(io, "    results:")
     println(io, "      - task:")
     println(io, "          type: custom")
@@ -329,17 +364,30 @@ function write_model_card_front_matter(io::IO, summary::Dict{String,Any})
     println(io, "        metrics:")
     println(io, "          - name: Best selection score")
     println(io, "            type: best_selection_score")
-    println(io, "            value: $best_selection_score")
+    println(io, "            value: $(format_metric(best_selection_score))")
+    println(
+        io,
+        "            description: Best-scoring checkpoint win rate during training selection.",
+    )
     println(io, "          - name: Baseline win rate")
     println(io, "            type: baseline_win_rate")
-    println(io, "            value: $baseline_win_rate")
+    println(io, "            value: $(format_metric(baseline_win_rate))")
+    println(
+        io,
+        "            description: Win rate of the best checkpoint against the RandomAgent baseline.",
+    )
     println(io, "          - name: Final loss")
     println(io, "            type: final_loss")
-    println(io, "            value: $final_loss")
+    println(io, "            value: $(format_metric(final_loss))")
+    println(io, "            description: Training loss of the final checkpoint.")
     if selection_current_best_rate !== nothing
         println(io, "          - name: Selection current best rate")
         println(io, "            type: selection_current_best_rate")
-        println(io, "            value: $selection_current_best_rate")
+        println(io, "            value: $(format_metric(selection_current_best_rate))")
+        println(
+            io,
+            "            description: Win rate of the best checkpoint against the current best at selection.",
+        )
     end
     println(io, "---")
     println(io)
@@ -706,98 +754,438 @@ function read_release_summary(path::AbstractString)::Dict{String,Any}
 end
 
 """
-    release_model_card(summary, artifact_specs; bundle_kind, model_export_format) -> String
+    release_model_card(summary, artifact_specs; bundle_kind, model_export_format, training_config, model_params) -> String
 
 Generate the full text of a Hugging Face model card (README.md) from a release summary
-and artifact specifications.
+and artifact specifications. Pure render: the bundled training configuration and the
+public parameter count are passed in by the caller; their defaults keep older releases
+rendering defensively without the new config files. Only the `run` and `metrics`
+summary sections are read — `paths` metadata lives in the manifest, never the card.
 """
 function release_model_card(
     summary::Dict{String,Any},
     artifact_specs::Dict{String,String};
     bundle_kind::AbstractString,
     model_export_format::AbstractString,
+    training_config::Dict{String,Any} = Dict{String,Any}(),
+    model_params::Union{Int,Nothing} = nothing,
 )::String
-    sections = release_summary_sections(summary)
-    release_id = String(sections.run["release_id"])
-    architecture = String(sections.run["architecture"])
-    commit_sha = String(sections.run["commit_sha"])
-    timestamp = String(sections.run["timestamp"])
-    checkpoint_dir = String(sections.run["checkpoint_dir"])
-    runtime_config_snapshot = String(sections.paths["runtime_config_snapshot"])
-    model_config_snapshot = String(sections.paths["model_config_snapshot"])
-    training_state_path = String(sections.paths["training_state_path"])
-    last_checkpoint_path = String(sections.paths["last_checkpoint_path"])
-    best_checkpoint_path = String(sections.paths["best_checkpoint_path"])
-    final_checkpoint_path = String(sections.paths["final_checkpoint_path"])
-    last_iter = sections.metrics["last_iter"]
-    best_selection_score = sections.metrics["best_selection_score"]
-    baseline_win_rate = sections.metrics["baseline_win_rate"]
-    final_loss = sections.metrics["final_loss"]
-    selection_current_best_rate =
-        get(sections.metrics, "selection_current_best_rate", nothing)
-    selection_promoted = get(sections.metrics, "selection_promoted", nothing)
+    run = summary["run"]
+    metrics = summary["metrics"]
+    release_id = String(run["release_id"])
+    architecture = String(run["architecture"])
+    commit_sha = String(run["commit_sha"])
+    timestamp = String(run["timestamp"])
+    last_iter = metrics["last_iter"]
+    best_selection_score = metrics["best_selection_score"]
+    baseline_win_rate = metrics["baseline_win_rate"]
+    final_loss = metrics["final_loss"]
+    selection_current_best_rate = get(metrics, "selection_current_best_rate", nothing)
+    selection_promoted = get(metrics, "selection_promoted", nothing)
 
     io = IOBuffer()
     write_model_card_front_matter(io, summary)
-    println(io, "# Awale release $release_id model card")
+    println(io, "# $CARD_MODEL_NAME")
     println(io)
     println(
         io,
         "This model card documents an Awale policy/value network implemented in Julia with Flux.jl. The YAML metadata above comes from the release summary and should be treated as the source of truth for this bundle.",
     )
     println(io)
-    println(io, "## Release metadata")
-    println(io, "- Architecture: $architecture")
-    println(io, "- Release ID: $release_id")
-    println(io, "- Commit SHA: $commit_sha")
-    println(io, "- Timestamp: $timestamp")
-    println(io, "- Checkpoint dir: $checkpoint_dir")
+    println(io, "## Release")
+    println(io, "- Release ID: $(markdown_inline_escape(release_id))")
+    println(io, "- Commit SHA: $(markdown_inline_escape(commit_sha))")
+    println(io, "- Timestamp: $(markdown_inline_escape(timestamp))")
     println(io, "- Bundle kind: $(bundle_kind)")
     println(io, "- Model export format: $(model_export_format)")
     println(io)
-    println(io, "## Metrics")
-    println(io, "- Last iteration: $last_iter")
-    println(io, "- Best selection score: $best_selection_score")
-    println(io, "- Baseline win rate: $baseline_win_rate")
-    println(io, "- Final loss: $final_loss")
-    if selection_current_best_rate !== nothing
-        println(io, "- Selection current best rate: $selection_current_best_rate")
-    end
-    if selection_promoted !== nothing
-        println(io, "- Selection promoted: $selection_promoted")
-    end
+    card_model_details(
+        io;
+        architecture = architecture,
+        model_params = model_params,
+        timestamp = timestamp,
+    )
     println(io)
-    println(io, "## Source paths")
-    println(io, "- Runtime config snapshot: $runtime_config_snapshot")
-    println(io, "- Model config snapshot: $model_config_snapshot")
-    println(io, "- Training state: $training_state_path")
-    println(io, "- Last checkpoint: $last_checkpoint_path")
-    println(io, "- Best checkpoint: $best_checkpoint_path")
-    println(io, "- Final checkpoint: $final_checkpoint_path")
+    card_usage(
+        io;
+        artifact_specs = artifact_specs,
+        model_export_format = model_export_format,
+    )
     println(io)
-    println(io, "## Bundle contents")
-    println(io, "- `$(RELEASE_SUMMARY_FILE)`")
-    println(io, "- `$(MANIFEST_FILE)`")
-    println(io, "- `$(MODEL_CARD_FILE)`")
-    for bundle_relpath in sort!(collect(keys(artifact_specs)))
-        println(io, "- `$(bundle_relpath)`")
-    end
-
+    card_training_details(io; training_config = training_config, last_iter = last_iter)
     println(io)
-    println(io, "## Code")
-    println(io, "- Training scripts")
-    println(io, "- Inference code")
-    println(io, "- Evaluation scripts")
-    println(io, "- Configuration files")
-    println(io, "- <https://github.com/emiliodavola/awale>")
-
+    card_evaluation(
+        io;
+        best_selection_score = best_selection_score,
+        baseline_win_rate = baseline_win_rate,
+        final_loss = final_loss,
+        selection_current_best_rate = selection_current_best_rate,
+        selection_promoted = selection_promoted,
+        training_config = training_config,
+    )
+    println(io)
+    card_limitations(io; training_config = training_config)
+    println(io)
+    card_bundle_contents(io, artifact_specs)
+    println(io)
+    card_code_section(io)
+    println(io)
+    card_citation(io)
     return String(take!(io))
 end
 
 """
-    write_release_model_card(bundle_dir, summary, artifact_specs; bundle_kind, model_export_format) -> String
+    card_model_details(io; architecture, model_params, timestamp)
+
+Write the `## Model Details` section: architecture, parameter count, framework,
+input encoding, outputs, license, and release date.
+"""
+function card_model_details(
+    io::IO;
+    architecture::AbstractString,
+    model_params::Union{Int,Nothing},
+    timestamp::AbstractString,
+)
+    println(io, "## Model Details")
+    println(io, "- Architecture: $(markdown_inline_escape(architecture))")
+    param_count = model_params === nothing ? "not recorded" : string(model_params)
+    println(io, "- Parameter count: $param_count")
+    println(io, "- Framework: Julia with Flux.jl")
+    println(
+        io,
+        "- Input encoding: canonicalized board state as a 4x12 tensor (48 Float32 features)",
+    )
+    println(
+        io,
+        "- Outputs: policy logits for 6 local actions and a scalar value in [-1, 1]",
+    )
+    println(io, "- License: MIT")
+    println(io, "- Release date: $(markdown_inline_escape(timestamp))")
+end
+
+"""
+    best_checkpoint_bundle_path(artifact_specs, model_export_format) -> String
+
+Return the bundle-relative path of the best-checkpoint weights that actually ship
+in the bundle, so the Usage snippet always references a real file. Prefers the
+artifact listed in `artifact_specs` (Float32 export first), falling back to the
+export-format convention when no best checkpoint is bundled.
+"""
+function best_checkpoint_bundle_path(
+    artifact_specs::AbstractDict,
+    model_export_format::AbstractString,
+)::String
+    for candidate in ("artifacts/model_best.f32", "artifacts/model_best.bin")
+        haskey(artifact_specs, candidate) && return candidate
+    end
+    return String(model_export_format) == "float32" ? "artifacts/model_best.f32" :
+           "artifacts/model_best.bin"
+end
+
+"""
+    card_usage(io; artifact_specs, model_export_format)
+
+Write the `## Usage` section: how to load the bundled weights and run inference.
+The weights path is derived from the actual bundle, and the loader is dispatched
+to the payload format — `.f32` payloads are raw Float32 weights for
+`load_public_model`, `.bin` checkpoints are Julia-serialized objects for
+`load_model` — so the snippet never calls the wrong loader on a real file.
+"""
+function card_usage(
+    io::IO;
+    artifact_specs::Dict{String,String},
+    model_export_format::AbstractString,
+)
+    weights_path = best_checkpoint_bundle_path(artifact_specs, model_export_format)
+    loader =
+        endswith(weights_path, ".f32") ? "Awale.Model.load_public_model" :
+        "Awale.Model.load_model"
+    println(io, "## Usage")
+    println(
+        io,
+        "The model is a policy/value network trained by self-play. Load the bundled weights and run inference with Julia and Flux.jl:",
+    )
+    println(io)
+    println(io, "```julia")
+    println(io, "using Awale")
+    println(io, "model = $(loader)(\"$weights_path\")")
+    println(io, "logits, value = Awale.predict_inference(model, Awale.initial_state())")
+    println(io, "```")
+    println(io)
+    println(
+        io,
+        "`predict_inference` returns policy logits for the 6 local actions of the player to move and a scalar position value in [-1, 1].",
+    )
+end
+
+"""
+    summarize_training_flag(value) -> String
+
+Reduce a bundled `training` configuration entry to a short scalar label for the
+card. Booleans and full `[training]` tables (production snapshots carry a table
+with many scalar fields) both collapse to "enabled"/"disabled"; other values
+fall back to their string form, so a raw `Dict` repr is never printed.
+"""
+function summarize_training_flag(value)::String
+    value === true && return "enabled"
+    value === false && return "disabled"
+    (value isa AbstractDict || value isa AbstractVector) && return "enabled"
+    return string(value)
+end
+
+"""
+    card_training_details(io; training_config, last_iter)
+
+Write the `## Training Details` section: the AlphaZero-style self-play recipe and,
+when present, the bundled training configuration.
+"""
+function card_training_details(io::IO; training_config::Dict{String,Any}, last_iter::Real)
+    println(io, "## Training Details")
+    println(
+        io,
+        "The network was trained with AlphaZero-style self-play: Monte Carlo Tree Search (PUCT) generates games, and the network is updated on sampled positions with policy and value targets.",
+    )
+    println(
+        io,
+        "The training state reports `last_iter = $(format_metric(last_iter))` iterations.",
+    )
+    if isempty(training_config)
+        println(io, "No bundled training configuration was recorded for this release.")
+    else
+        training_flag = get(training_config, "training", "n/a")
+        training_summary = summarize_training_flag(training_flag)
+        println(
+            io,
+            "Bundled training configuration: `training = $(markdown_inline_escape(training_summary))`.",
+        )
+    end
+end
+
+"""
+    config_budget(training_config, section, key, fallback) -> Real
+
+Read a numeric budget (e.g. MCTS simulations, evaluation games, promotion
+threshold) from the bundled training configuration. Returns `fallback` when the
+section or key is missing or holds a non-numeric value, so the card renders the
+documented defaults for older bundles without config snapshots.
+"""
+function config_budget(
+    training_config::AbstractDict,
+    section::AbstractString,
+    key::AbstractString,
+    fallback::Real,
+)::Real
+    section_dict = get(training_config, section, nothing)
+    section_dict isa AbstractDict || return fallback
+    value = get(section_dict, key, fallback)
+    return value isa Real ? value : fallback
+end
+
+"""
+    evaluation_budgets(training_config) -> NamedTuple
+
+Resolve the evaluation budgets used by the Evaluation and Limitations sections
+in one place: MCTS simulations per evaluation, evaluation game count, promotion
+game count, and promotion threshold. The fallback constants live here so the two
+section helpers can never drift apart.
+"""
+function evaluation_budgets(training_config::AbstractDict)
+    return (
+        sims_per_eval = config_budget(training_config, "evaluation", "sims_per_eval", 400),
+        eval_games = config_budget(training_config, "evaluation", "eval_games", 100),
+        promotion_games = config_budget(
+            training_config,
+            "selection",
+            "promotion_games",
+            200,
+        ),
+        promotion_threshold = config_budget(
+            training_config,
+            "selection",
+            "promotion_threshold",
+            56.0,
+        ),
+    )
+end
+
+"""
+    card_evaluation(io; best_selection_score, baseline_win_rate, final_loss, selection_current_best_rate, selection_promoted, training_config)
+
+Write the `## Evaluation` section: methodology (RandomAgent baseline, MCTS
+simulations, evaluation games, promotion gate), the rounded metrics, and the
+per-checkpoint promotion narrative derived from the optional `selection_promoted`
+flag. Budgets are read from the bundled training configuration with documented
+fallbacks. A global flag line is never printed.
+"""
+function card_evaluation(
+    io::IO;
+    best_selection_score::Real,
+    baseline_win_rate::Real,
+    final_loss::Real,
+    selection_current_best_rate::Union{Nothing,Real},
+    selection_promoted::Union{Nothing,Bool},
+    training_config::Dict{String,Any} = Dict{String,Any}(),
+)
+    budgets = evaluation_budgets(training_config)
+    println(io, "## Evaluation")
+    println(
+        io,
+        "Evaluation pits the trained network against a RandomAgent baseline with $(format_metric(budgets.sims_per_eval)) MCTS simulations per move over $(format_metric(budgets.eval_games)) evaluation games. A checkpoint is promoted only when it reaches a decided win rate of at least $(format_metric(budgets.promotion_threshold))% over $(format_metric(budgets.promotion_games)) promotion games against the current best.",
+    )
+    println(io)
+    println(io, "Metrics:")
+    println(io, "- Best selection score: $(format_metric(best_selection_score))")
+    println(io, "- Baseline win rate: $(format_metric(baseline_win_rate))")
+    println(io, "- Final loss: $(format_metric(final_loss))")
+    if selection_current_best_rate !== nothing
+        println(
+            io,
+            "- Selection current best rate: $(format_metric(selection_current_best_rate))",
+        )
+    end
+    println(io)
+    println(io, "Checkpoint status:")
+    best_narrative = if selection_promoted === true
+        "passed the promotion gate when selected"
+    elseif selection_promoted === false
+        "did not pass the promotion gate at the last selection"
+    else
+        "best-scoring checkpoint during training"
+    end
+    println(io, "- `model_best`: $best_narrative")
+    println(io, "- `model_last`: final run state; not subject to the promotion gate")
+    println(io, "- `model_final`: final run state; not subject to the promotion gate")
+end
+
+"""
+    card_limitations(io; training_config)
+
+Write the `## Limitations` section.
+"""
+function card_limitations(io::IO; training_config::Dict{String,Any} = Dict{String,Any}())
+    sims_per_eval = evaluation_budgets(training_config).sims_per_eval
+    println(io, "## Limitations")
+    println(
+        io,
+        "- The model was trained exclusively by self-play and has not seen human games.",
+    )
+    println(
+        io,
+        "- Policy outputs cover 6 local actions; effective strength depends on the MCTS budget used at inference time.",
+    )
+    println(
+        io,
+        "- Evaluation reflects the fixed RandomAgent baseline and the $(format_metric(sims_per_eval))-simulation search budget.",
+    )
+end
+
+const BUNDLE_ARTIFACT_DESCRIPTIONS = Dict{String,String}(
+    "release_summary.toml" => "release metadata and evaluation metrics",
+    "model_best.f32" => "best checkpoint weights (promotion-gated)",
+    "model_best.bin" => "best checkpoint weights (promotion-gated)",
+    "model_last.f32" => "last checkpoint weights (final run state)",
+    "model_last.bin" => "last checkpoint weights (final run state)",
+    "model_final.f32" => "final checkpoint weights (final run state)",
+    "model_final.bin" => "final checkpoint weights (final run state)",
+    "training_state.toml" => "training state snapshot",
+    "training_config.toml" => "runtime configuration snapshot",
+    "model_config.toml" => "model configuration snapshot",
+    "manifest.toml" => "bundle manifest with integrity checksums",
+    "README.md" => "this model card",
+)
+
+"""
+    artifact_description(bundle_relpath) -> String
+
+Return a one-line description of a bundled artifact's role, keyed by filename.
+"""
+function artifact_description(bundle_relpath::AbstractString)::String
+    return get(
+        BUNDLE_ARTIFACT_DESCRIPTIONS,
+        basename(String(bundle_relpath)),
+        "bundled release artifact",
+    )
+end
+
+"""
+    card_bundle_contents(io, artifact_specs)
+
+Write the `## Bundle contents` section, listing every bundled file exactly once
+(sorted artifact relpaths, with `manifest.toml`/`README.md` appended only when
+absent), each with a one-line description of its role.
+"""
+function card_bundle_contents(io::IO, artifact_specs::Dict{String,String})
+    println(io, "## Bundle contents")
+    files = String[String(relpath) for relpath in sort!(collect(keys(artifact_specs)))]
+    for extra in (MANIFEST_FILE, MODEL_CARD_FILE)
+        extra in files || push!(files, extra)
+    end
+    for file in files
+        println(io, "- `$file`: $(artifact_description(file))")
+    end
+end
+
+"""
+    card_code_section(io)
+
+Write the `## Code` section: hyperlinks into the GitHub repository covering
+training scripts, inference code, evaluation scripts, configuration files,
+and the repository itself (listed last).
+"""
+function card_code_section(io::IO)
+    println(io, "## Code")
+    println(
+        io,
+        "- [Training scripts](https://github.com/emiliodavola/awale/blob/main/train.jl)",
+    )
+    println(
+        io,
+        "- [Inference code](https://github.com/emiliodavola/awale/blob/main/src/Awale/Model.jl)",
+    )
+    println(
+        io,
+        "- [Evaluation scripts](https://github.com/emiliodavola/awale/blob/main/checkpoint_arena.jl)",
+    )
+    println(
+        io,
+        "- [Configuration files](https://github.com/emiliodavola/awale/blob/main/src/Awale/config.toml)",
+    )
+    println(io, "- [Repository](https://github.com/emiliodavola/awale)")
+end
+
+"""
+    card_citation(io)
+
+Write the `## Citation` section: a BibTeX entry for the repository and the license.
+"""
+function card_citation(io::IO)
+    println(io, "## Citation")
+    println(
+        io,
+        "If you use this model or repository in your work, please cite the repository:",
+    )
+    println(io)
+    println(io, "```bibtex")
+    println(io, "@misc{awale2026,")
+    println(
+        io,
+        "  title = {Awale AlphaZero-like: self-play reinforcement learning for Awale},",
+    )
+    println(io, "  author = {Emilio Correa Dávola},")
+    println(io, "  year = {2026},")
+    println(io, "  howpublished = {\\url{https://github.com/emiliodavola/awale}}")
+    println(io, "}")
+    println(io, "```")
+    println(io)
+    println(io, "The model is released under the MIT license.")
+end
+
+"""
+    write_release_model_card(bundle_dir, summary, artifact_specs; bundle_kind, model_export_format, training_config, model_params) -> String
 
 Atomically write a model card README.md to `bundle_dir` using the release summary.
+`training_config` and `model_params` are caller-resolved bundle data (no IO happens
+inside the render); their defaults keep older callers working.
 """
 function write_release_model_card(
     bundle_dir::AbstractString,
@@ -805,6 +1193,8 @@ function write_release_model_card(
     artifact_specs::Dict{String,String};
     bundle_kind::AbstractString,
     model_export_format::AbstractString,
+    training_config::Dict{String,Any} = Dict{String,Any}(),
+    model_params::Union{Int,Nothing} = nothing,
 )::String
     path = release_model_card_path(bundle_dir)
     atomic_write(path) do io
@@ -815,6 +1205,8 @@ function write_release_model_card(
                 artifact_specs;
                 bundle_kind = bundle_kind,
                 model_export_format = model_export_format,
+                training_config = training_config,
+                model_params = model_params,
             ),
         )
     end
@@ -1085,6 +1477,8 @@ end
     write_release_bundle(bundle_dir, summary, artifact_specs; bundle_kind, model_export_format) -> bundle_dir
 
 Write the model card and manifest TOML into a prepared bundle directory.
+Config parsing and the public parameter count are resolved here (file IO)
+and passed down to the pure card render, so the render never touches disk.
 """
 function write_release_bundle(
     bundle_dir::AbstractString,
@@ -1093,12 +1487,17 @@ function write_release_bundle(
     bundle_kind::AbstractString,
     model_export_format::AbstractString,
 )
+    training_config, _ = read_bundle_configs(bundle_dir)
+    model_params =
+        public_model_parameter_count(bundle_dir; model_export_format = model_export_format)
     write_release_model_card(
         bundle_dir,
         summary,
         artifact_specs;
         bundle_kind = bundle_kind,
         model_export_format = model_export_format,
+        training_config = training_config,
+        model_params = model_params,
     )
     atomic_write(joinpath(bundle_dir, MANIFEST_FILE)) do io
         TOML.print(
