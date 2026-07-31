@@ -981,6 +981,33 @@ function config_budget(
 end
 
 """
+    evaluation_budgets(training_config) -> NamedTuple
+
+Resolve the evaluation budgets used by the Evaluation and Limitations sections
+in one place: MCTS simulations per evaluation, evaluation game count, promotion
+game count, and promotion threshold. The fallback constants live here so the two
+section helpers can never drift apart.
+"""
+function evaluation_budgets(training_config::AbstractDict)
+    return (
+        sims_per_eval = config_budget(training_config, "evaluation", "sims_per_eval", 400),
+        eval_games = config_budget(training_config, "evaluation", "eval_games", 100),
+        promotion_games = config_budget(
+            training_config,
+            "selection",
+            "promotion_games",
+            200,
+        ),
+        promotion_threshold = config_budget(
+            training_config,
+            "selection",
+            "promotion_threshold",
+            56.0,
+        ),
+    )
+end
+
+"""
     card_evaluation(io; best_selection_score, baseline_win_rate, final_loss, selection_current_best_rate, selection_promoted, training_config)
 
 Write the `## Evaluation` section: methodology (RandomAgent baseline, MCTS
@@ -998,15 +1025,11 @@ function card_evaluation(
     selection_promoted::Union{Nothing,Bool},
     training_config::Dict{String,Any} = Dict{String,Any}(),
 )
-    sims_per_eval = config_budget(training_config, "evaluation", "sims_per_eval", 400)
-    eval_games = config_budget(training_config, "evaluation", "eval_games", 100)
-    promotion_games = config_budget(training_config, "selection", "promotion_games", 200)
-    promotion_threshold =
-        config_budget(training_config, "selection", "promotion_threshold", 56.0)
+    budgets = evaluation_budgets(training_config)
     println(io, "## Evaluation")
     println(
         io,
-        "Evaluation pits the trained network against a RandomAgent baseline with $(format_metric(sims_per_eval)) MCTS simulations per move over $(format_metric(eval_games)) evaluation games. A checkpoint is promoted only when it reaches a decided win rate of at least $(format_metric(promotion_threshold))% over $(format_metric(promotion_games)) promotion games against the current best.",
+        "Evaluation pits the trained network against a RandomAgent baseline with $(format_metric(budgets.sims_per_eval)) MCTS simulations per move over $(format_metric(budgets.eval_games)) evaluation games. A checkpoint is promoted only when it reaches a decided win rate of at least $(format_metric(budgets.promotion_threshold))% over $(format_metric(budgets.promotion_games)) promotion games against the current best.",
     )
     println(io)
     println(io, "Metrics:")
@@ -1039,7 +1062,7 @@ end
 Write the `## Limitations` section.
 """
 function card_limitations(io::IO; training_config::Dict{String,Any} = Dict{String,Any}())
-    sims_per_eval = config_budget(training_config, "evaluation", "sims_per_eval", 400)
+    sims_per_eval = evaluation_budgets(training_config).sims_per_eval
     println(io, "## Limitations")
     println(
         io,

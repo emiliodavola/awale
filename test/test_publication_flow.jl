@@ -642,6 +642,30 @@ end
         @test !occursin("model_best.f32", card)
     end
 
+    @testset "evaluation_budgets centralizes section budget fallbacks" begin
+        budgets = Awale.Publication.evaluation_budgets(Dict{String,Any}())
+        @test budgets.sims_per_eval == 400
+        @test budgets.eval_games == 100
+        @test budgets.promotion_games == 200
+        @test budgets.promotion_threshold == 56.0
+
+        custom = Dict{String,Any}(
+            "evaluation" => Dict{String,Any}(
+                "sims_per_eval" => 100,
+                "eval_games" => 50,
+            ),
+            "selection" => Dict{String,Any}(
+                "promotion_threshold" => 60.0,
+                "promotion_games" => 150,
+            ),
+        )
+        budgets = Awale.Publication.evaluation_budgets(custom)
+        @test budgets.sims_per_eval == 100
+        @test budgets.eval_games == 50
+        @test budgets.promotion_games == 150
+        @test budgets.promotion_threshold == 60.0
+    end
+
     @testset "read_bundle_configs parses bundle config TOMLs defensively" begin
         mktempdir() do root_dir
             empty_bundle = joinpath(root_dir, "empty")
