@@ -867,4 +867,303 @@ end
             ) == nothing
         end
     end
+
+    @testset "promotion narrative variants: false / absent / neutral prose" begin
+        card_true = Awale.Publication.release_model_card(
+            synthetic_summary(),
+            Dict{String,String}("release_summary.toml" => "s");
+            bundle_kind = "local_trusted",
+            model_export_format = "serialization",
+        )
+        # true is already tested in the main flow; confirm the exact prose
+        @test occursin("- `model_best`: passed the promotion gate when selected", card_true)
+
+        summary_false = synthetic_summary()
+        summary_false["metrics"]["selection_promoted"] = false
+        card_false = Awale.Publication.release_model_card(
+            summary_false,
+            Dict{String,String}("release_summary.toml" => "s");
+            bundle_kind = "local_trusted",
+            model_export_format = "serialization",
+        )
+        @test occursin(
+            "- `model_best`: did not pass the promotion gate at the last selection",
+            card_false,
+        )
+        @test !occursin("passed the promotion gate when selected", card_false)
+        @test !occursin("Selection promoted", card_false)
+
+        summary_absent = synthetic_summary()
+        delete!(summary_absent["metrics"], "selection_promoted")
+        card_absent = Awale.Publication.release_model_card(
+            summary_absent,
+            Dict{String,String}("release_summary.toml" => "s");
+            bundle_kind = "local_trusted",
+            model_export_format = "serialization",
+        )
+        @test occursin(
+            "- `model_best`: best-scoring checkpoint during training",
+            card_absent,
+        )
+        @test !occursin("Selection promoted", card_absent)
+        @test !occursin("passed the promotion gate", card_absent)
+        @test !occursin("did not pass the promotion gate", card_absent)
+    end
+
+    @testset "defensive render: empty configs, missing params, missing optional metrics" begin
+        summary = synthetic_summary()
+        delete!(summary["metrics"], "selection_promoted")
+        delete!(summary["metrics"], "selection_current_best_rate")
+
+        card = Awale.Publication.release_model_card(
+            summary,
+            Dict{String,String}("release_summary.toml" => "s");
+            bundle_kind = "local_trusted",
+            model_export_format = "serialization",
+            training_config = Dict{String,Any}(),
+            model_params = nothing,
+        )
+        @test occursin("Parameter count: not recorded", card)
+        @test occursin("No bundled training configuration was recorded", card)
+        # neutral promotion when absent
+        @test occursin("- `model_best`: best-scoring checkpoint during training", card)
+        # no selection_current_best_rate in body
+        @test !occursin("Selection current best rate", card)
+        # no selection_current_best_rate in YAML model-index
+        @test !occursin("selection_current_best_rate", card)
+        @test !occursin("n/a", card)  # no non-finite fallback injected
+        # card still renders all required sections
+        @test occursin("## Release", card)
+        @test occursin("## Model Details", card)
+        @test occursin("## Usage", card)
+        @test occursin("## Training Details", card)
+        @test occursin("## Evaluation", card)
+        @test occursin("## Limitations", card)
+        @test occursin("## Bundle contents", card)
+        @test occursin("## Code", card)
+        @test occursin("## Citation", card)
+    end
+
+    @testset "body and YAML model-index agree on a value that actually rounds" begin
+        raw_value = 61.702127659574465
+        rounded = Awale.Publication.format_metric(raw_value)
+        @test rounded == "61.7"
+
+        summary = synthetic_summary()
+        summary["metrics"]["best_selection_score"] = raw_value
+        specs = Dict{String,String}("release_summary.toml" => "s")
+        card = Awale.Publication.release_model_card(
+            summary,
+            specs;
+            bundle_kind = "local_trusted",
+            model_export_format = "serialization",
+        )
+        # body: the metric line must show the rounded value
+        @test occursin("Best selection score: $rounded", card)
+        # YAML model-index: the value must agree
+        @test occursin("value: $rounded", card)
+        # the raw (unrounded) value must NOT appear anywhere
+        @test !occursin("61.702127659574465", card)
+        @test !occursin("61.702", card)  # sigdigits=3 would produce this
+        @test !occursin("61.7021", card)  # sigdigits=5 would produce this
+    end
+
+    @testset "bundle contents deduplication: custom specs, missing release_summary.toml" begin
+        # custom spec WITHOUT release_summary.toml — ensure the fallback appends
+        # manifest.toml and README.md but does not duplicate anything
+        custom = Dict{String,String}(
+            "artifacts/model_best.bin" => "b",
+            "artifacts/training_state.toml" => "ts",
+        )
+        card = Awale.Publication.release_model_card(
+            synthetic_summary(),
+            custom;
+            bundle_kind = "local_trusted",
+            model_export_format = "serialization",
+        )
+        # every bundled file appears exactly once
+        # model_best.bin also appears in the Usage code snippet — that is
+        # legitimate. We only assert the Bundle contents section has one entry each.
+        bundle_section = split(card, "## Bundle contents")[2]
+        bundle_section = split(bundle_section, "## Code")[1]
+        @test count("model_best.bin", bundle_section) == 1
+        @test count("training_state.toml", bundle_section) == 1
+        @test count("manifest.toml", bundle_section) == 1
+        @test count("README.md", bundle_section) == 1
+
+        # spec WITH release_summary.toml — it appears once in the bundle list, not twice
+        specs_with_summary = Dict{String,String}(
+            "release_summary.toml" => "s",
+            "artifacts/model_best.bin" => "b",
+        )
+        card2 = Awale.Publication.release_model_card(
+            synthetic_summary(),
+            specs_with_summary;
+            bundle_kind = "local_trusted",
+            model_export_format = "serialization",
+        )
+        bundle_section2 = split(card2, "## Bundle contents")[2]
+        bundle_section2 = split(bundle_section2, "## Code")[1]
+        @test count("release_summary.toml", bundle_section2) == 1
+        @test count("model_best.bin", bundle_section2) == 1
+    end
+
+    @testset "evaluation methodology prose is asserted exactly" begin
+        # default budgets: 400 sims, 100 eval games, 56%, 200 promotion games
+        card_default = Awale.Publication.release_model_card(
+            synthetic_summary(),
+            Dict{String,String}("release_summary.toml" => "s");
+            bundle_kind = "local_trusted",
+            model_export_format = "serialization",
+        )
+        @test occursin(
+            "Evaluation pits the trained network against a RandomAgent baseline with 400 MCTS simulations per move over 100 evaluation games.",
+            card_default,
+        )
+        @test occursin(
+            "A checkpoint is promoted only when it reaches a decided win rate of at least 56% over 200 promotion games against the current best.",
+            card_default,
+        )
+        @test occursin(
+            "with 400 MCTS simulations per move over 100 evaluation games",
+            card_default,
+        )
+
+        # custom budgets: 100 sims, 50 eval games, 60%, 150 promotion games
+        budgets = Dict{String,Any}(
+            "evaluation" =>
+                Dict{String,Any}("sims_per_eval" => 100, "eval_games" => 50),
+            "selection" => Dict{String,Any}(
+                "promotion_threshold" => 60.0,
+                "promotion_games" => 150,
+            ),
+        )
+        card_custom = Awale.Publication.release_model_card(
+            synthetic_summary(),
+            Dict{String,String}("release_summary.toml" => "s");
+            bundle_kind = "local_trusted",
+            model_export_format = "serialization",
+            training_config = budgets,
+        )
+        @test occursin(
+            "with 100 MCTS simulations per move over 50 evaluation games",
+            card_custom,
+        )
+        @test occursin("at least 60% over 150 promotion games", card_custom)
+        # limitations section uses the same budgets
+        @test occursin("100-simulation search budget", card_custom)
+    end
+
+    @testset "card never leaks paths even when the summary carries [paths]" begin
+        # Build a summary dictionary that explicitly includes a [paths] section
+        # with local filesystem paths — the render must only read [run] and [metrics].
+        summary = Dict{String,Any}(
+            "run" => Dict{String,Any}(
+                "commit_sha" => "abc123",
+                "architecture" => "mlp",
+                "release_id" => "20260719_120000",
+                "timestamp" => "2026-07-19T12:00:00",
+                "checkpoint_dir" => "checkpoints/mlp",
+            ),
+            "paths" => Dict{String,Any}(
+                "runtime_config_snapshot" => "checkpoints/mlp/log/config.toml",
+                "model_config_snapshot" => "checkpoints/mlp/log/model.toml",
+                "training_state_path" => "checkpoints/mlp/training_state.toml",
+                "last_checkpoint_path" => "checkpoints/mlp/model_last.bin",
+                "best_checkpoint_path" => "checkpoints/mlp/model_best.bin",
+                "final_checkpoint_path" => "checkpoints/mlp/model_final.bin",
+            ),
+            "metrics" => Dict{String,Any}(
+                "last_iter" => 300,
+                "best_selection_score" => 62.5,
+                "baseline_win_rate" => 71.0,
+                "final_loss" => 0.42,
+            ),
+        )
+        card = Awale.Publication.release_model_card(
+            summary,
+            Dict{String,String}("release_summary.toml" => "s");
+            bundle_kind = "local_trusted",
+            model_export_format = "serialization",
+        )
+        @test !occursin("Source paths", card)
+        @test !occursin("checkpoints", card)
+        @test !occursin("model_final.bin", card)
+        @test !occursin("model_last.bin", card)
+        @test !occursin("training_state.toml", card)
+        # training_config.toml / model_config.toml appear in the Code section
+        # as public GitHub URLs (not local paths) — verify no bare filename leak
+        # in non-Code sections
+        card_before_code = split(card, "## Code")[1]
+        @test !occursin("training_config.toml", card_before_code)
+        @test !occursin("model_config.toml", card_before_code)
+        # the card still renders correctly
+        @test occursin("## Release", card)
+        @test occursin("Commit SHA: abc123", card)
+    end
+
+    # --- T9: E2E restage — version gate edge cases ---
+
+    @testset "staged bundles rebuild when manifest misses model_card_generator_version" begin
+        mktempdir() do root_dir
+            summary_path = seed_release_inputs(root_dir)
+            planned =
+                Awale.Publication.plan_release_bundle(summary_path; root_dir = root_dir)
+            bundle_dir =
+                Awale.Publication.stage_release_bundle(summary_path; root_dir = root_dir)
+            manifest_path = joinpath(bundle_dir, "manifest.toml")
+            manifest = TOML.parsefile(manifest_path)
+
+            # Remove the model_card_generator_version key entirely
+            delete!(manifest, "model_card_generator_version")
+            open(manifest_path, "w") do io
+                TOML.print(io, manifest)
+            end
+
+            @test !Awale.Publication.bundle_is_valid(
+                bundle_dir,
+                planned.artifact_specs;
+                bundle_kind = "local_trusted",
+                model_export_format = "serialization",
+            )
+            restaged =
+                Awale.Publication.stage_release_bundle(summary_path; root_dir = root_dir)
+            @test restaged == bundle_dir
+            restored = TOML.parsefile(manifest_path)
+            @test get(restored, "model_card_generator_version", nothing) ==
+                  Awale.Publication.MODEL_CARD_GENERATOR_VERSION
+        end
+    end
+
+    @testset "staged bundles rebuild when model_card_generator_version is a non-integer" begin
+        mktempdir() do root_dir
+            summary_path = seed_release_inputs(root_dir)
+            planned =
+                Awale.Publication.plan_release_bundle(summary_path; root_dir = root_dir)
+            bundle_dir =
+                Awale.Publication.stage_release_bundle(summary_path; root_dir = root_dir)
+            manifest_path = joinpath(bundle_dir, "manifest.toml")
+            manifest = TOML.parsefile(manifest_path)
+
+            # Set the version to a string instead of an integer
+            manifest["model_card_generator_version"] = "3"
+            open(manifest_path, "w") do io
+                TOML.print(io, manifest)
+            end
+
+            @test !Awale.Publication.bundle_is_valid(
+                bundle_dir,
+                planned.artifact_specs;
+                bundle_kind = "local_trusted",
+                model_export_format = "serialization",
+            )
+            restaged =
+                Awale.Publication.stage_release_bundle(summary_path; root_dir = root_dir)
+            @test restaged == bundle_dir
+            restored = TOML.parsefile(manifest_path)
+            @test restored["model_card_generator_version"] ==
+                  Awale.Publication.MODEL_CARD_GENERATOR_VERSION
+            @test restored["model_card_generator_version"] isa Integer
+        end
+    end
 end
