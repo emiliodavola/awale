@@ -709,16 +709,21 @@ function read_release_summary(path::AbstractString)::Dict{String,Any}
 end
 
 """
-    release_model_card(summary, artifact_specs; bundle_kind, model_export_format) -> String
+    release_model_card(summary, artifact_specs; bundle_kind, model_export_format, training_config, model_config, model_params) -> String
 
 Generate the full text of a Hugging Face model card (README.md) from a release summary
-and artifact specifications.
+and artifact specifications. Pure render: bundle configs and the public parameter
+count are passed in by the caller; their defaults keep older releases rendering
+defensively without the new config files.
 """
 function release_model_card(
     summary::Dict{String,Any},
     artifact_specs::Dict{String,String};
     bundle_kind::AbstractString,
     model_export_format::AbstractString,
+    training_config::Dict{String,Any} = Dict{String,Any}(),
+    model_config::Dict{String,Any} = Dict{String,Any}(),
+    model_params::Union{Int,Nothing} = nothing,
 )::String
     sections = release_summary_sections(summary)
     release_id = String(sections.run["release_id"])
@@ -798,9 +803,11 @@ function release_model_card(
 end
 
 """
-    write_release_model_card(bundle_dir, summary, artifact_specs; bundle_kind, model_export_format) -> String
+    write_release_model_card(bundle_dir, summary, artifact_specs; bundle_kind, model_export_format, training_config, model_config, model_params) -> String
 
 Atomically write a model card README.md to `bundle_dir` using the release summary.
+`training_config`, `model_config`, and `model_params` are caller-resolved bundle
+data (no IO happens inside the render); their defaults keep older callers working.
 """
 function write_release_model_card(
     bundle_dir::AbstractString,
@@ -808,6 +815,9 @@ function write_release_model_card(
     artifact_specs::Dict{String,String};
     bundle_kind::AbstractString,
     model_export_format::AbstractString,
+    training_config::Dict{String,Any} = Dict{String,Any}(),
+    model_config::Dict{String,Any} = Dict{String,Any}(),
+    model_params::Union{Int,Nothing} = nothing,
 )::String
     path = release_model_card_path(bundle_dir)
     atomic_write(path) do io
@@ -818,6 +828,9 @@ function write_release_model_card(
                 artifact_specs;
                 bundle_kind = bundle_kind,
                 model_export_format = model_export_format,
+                training_config = training_config,
+                model_config = model_config,
+                model_params = model_params,
             ),
         )
     end
@@ -1088,6 +1101,8 @@ end
     write_release_bundle(bundle_dir, summary, artifact_specs; bundle_kind, model_export_format) -> bundle_dir
 
 Write the model card and manifest TOML into a prepared bundle directory.
+Config parsing and the public parameter count are resolved here (file IO)
+and passed down to the pure card render, so the render never touches disk.
 """
 function write_release_bundle(
     bundle_dir::AbstractString,
@@ -1096,12 +1111,20 @@ function write_release_bundle(
     bundle_kind::AbstractString,
     model_export_format::AbstractString,
 )
+    training_config, model_config = read_bundle_configs(bundle_dir)
+    model_params = public_model_parameter_count(
+        bundle_dir;
+        model_export_format = model_export_format,
+    )
     write_release_model_card(
         bundle_dir,
         summary,
         artifact_specs;
         bundle_kind = bundle_kind,
         model_export_format = model_export_format,
+        training_config = training_config,
+        model_config = model_config,
+        model_params = model_params,
     )
     atomic_write(joinpath(bundle_dir, MANIFEST_FILE)) do io
         TOML.print(
