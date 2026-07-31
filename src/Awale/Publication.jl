@@ -897,8 +897,9 @@ function card_usage(
     model_export_format::AbstractString,
 )
     weights_path = best_checkpoint_bundle_path(artifact_specs, model_export_format)
-    loader = endswith(weights_path, ".f32") ?
-             "Awale.Model.load_public_model" : "Awale.Model.load_model"
+    loader =
+        endswith(weights_path, ".f32") ? "Awale.Model.load_public_model" :
+        "Awale.Model.load_model"
     println(io, "## Usage")
     println(
         io,

@@ -650,10 +650,8 @@ end
         @test budgets.promotion_threshold == 56.0
 
         custom = Dict{String,Any}(
-            "evaluation" => Dict{String,Any}(
-                "sims_per_eval" => 100,
-                "eval_games" => 50,
-            ),
+            "evaluation" =>
+                Dict{String,Any}("sims_per_eval" => 100, "eval_games" => 50),
             "selection" => Dict{String,Any}(
                 "promotion_threshold" => 60.0,
                 "promotion_games" => 150,
