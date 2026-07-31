@@ -174,12 +174,17 @@ end
 Round a metric value to 4 significant digits and strip trailing zeros so the
 card body and the YAML `model-index` always agree on a compact representation
 (e.g. `61.702127659574465 -> "61.7"`, `71.0 -> "71"`, `0.42 -> "0.42"`).
+Scientific notation keeps its exponent digits intact (`1.0e-10 -> "1e-10"`).
 """
 function format_metric(x::Real)::String
     rounded = string(round(Float64(x); sigdigits = 4))
-    occursin('.', rounded) || return rounded
-    stripped = rstrip(rounded, '0')
-    return isempty(stripped) ? rounded : rstrip(stripped, '.')
+    parts = split(rounded, 'e')
+    mantissa = parts[1]
+    occursin('.', mantissa) || return rounded
+    stripped = rstrip(mantissa, '0')
+    stripped = rstrip(stripped, '.')
+    stripped == "-0" && (stripped = "0")
+    return length(parts) == 1 ? stripped : stripped * "e" * parts[2]
 end
 
 """

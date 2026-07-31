@@ -288,6 +288,15 @@ end
         @test Awale.Publication.format_metric(1.23456) == "1.235"
         @test Awale.Publication.format_metric(0.5) == "0.5"
         @test Awale.Publication.format_metric(300) == "300"
+        @test Awale.Publication.format_metric(0) == "0"
+        @test Awale.Publication.format_metric(0.0) == "0"
+        @test Awale.Publication.format_metric(-0.0) == "0"
+        @test Awale.Publication.format_metric(-0.42) == "-0.42"
+        @test Awale.Publication.format_metric(-1.0e-10) == "-1e-10"
+        @test Awale.Publication.format_metric(1.0e-10) == "1e-10"
+        @test Awale.Publication.format_metric(1.0e20) == "1e20"
+        @test Awale.Publication.format_metric(1.0e-50) == "1e-50"
+        @test Awale.Publication.format_metric(1.2345) == "1.234"
     end
 
     @testset "read_bundle_configs parses bundle config TOMLs defensively" begin
