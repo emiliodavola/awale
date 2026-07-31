@@ -905,13 +905,16 @@ end
 Write the `## Training Details` section: the AlphaZero-style self-play recipe and,
 when present, the bundled training configuration.
 """
-function card_training_details(io::IO; training_config::Dict{String,Any}, last_iter::Int)
+function card_training_details(io::IO; training_config::Dict{String,Any}, last_iter::Real)
     println(io, "## Training Details")
     println(
         io,
         "The network was trained with AlphaZero-style self-play: Monte Carlo Tree Search (PUCT) generates games, and the network is updated on sampled positions with policy and value targets.",
     )
-    println(io, "The training state reports `last_iter = $last_iter` iterations.")
+    println(
+        io,
+        "The training state reports `last_iter = $(format_metric(last_iter))` iterations.",
+    )
     if isempty(training_config)
         println(io, "No bundled training configuration was recorded for this release.")
     else

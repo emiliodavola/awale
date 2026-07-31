@@ -571,6 +571,18 @@ end
         @test !occursin("Dict(", card)
     end
 
+    @testset "card training details accepts a float last_iter" begin
+        summary = synthetic_summary()
+        summary["metrics"]["last_iter"] = 300.0
+        card = Awale.Publication.release_model_card(
+            summary,
+            Dict{String,String}("release_summary.toml" => "s");
+            bundle_kind = "local_trusted",
+            model_export_format = "serialization",
+        )
+        @test occursin("last_iter = 300", card)
+    end
+
     @testset "read_bundle_configs parses bundle config TOMLs defensively" begin
         mktempdir() do root_dir
             empty_bundle = joinpath(root_dir, "empty")
