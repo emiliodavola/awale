@@ -885,6 +885,21 @@ function card_usage(io::IO)
 end
 
 """
+    summarize_training_flag(value) -> String
+
+Reduce a bundled `training` configuration entry to a short scalar label for the
+card. Booleans and full `[training]` tables (production snapshots carry a table
+with many scalar fields) both collapse to "enabled"/"disabled"; other values
+fall back to their string form, so a raw `Dict` repr is never printed.
+"""
+function summarize_training_flag(value)::String
+    value === true && return "enabled"
+    value === false && return "disabled"
+    (value isa AbstractDict || value isa AbstractVector) && return "enabled"
+    return string(value)
+end
+
+"""
     card_training_details(io; training_config, last_iter)
 
 Write the `## Training Details` section: the AlphaZero-style self-play recipe and,
@@ -901,9 +916,10 @@ function card_training_details(io::IO; training_config::Dict{String,Any}, last_i
         println(io, "No bundled training configuration was recorded for this release.")
     else
         training_flag = get(training_config, "training", "n/a")
+        training_summary = summarize_training_flag(training_flag)
         println(
             io,
-            "Bundled training configuration: `training = $(markdown_inline_escape(training_flag))`.",
+            "Bundled training configuration: `training = $(markdown_inline_escape(training_summary))`.",
         )
     end
 end

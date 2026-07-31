@@ -540,6 +540,37 @@ end
         @test !occursin("back`tick", card)
     end
 
+    @testset "card renders the bundled training flag as a scalar summary" begin
+        full_training = Dict{String,Any}(
+            "training" => Dict{String,Any}(
+                "num_iterations" => 550,
+                "games_per_iteration" => 200,
+                "sims_per_move" => 300,
+                "max_turns" => 1000,
+                "batch_size" => 128,
+            ),
+        )
+        card = Awale.Publication.release_model_card(
+            synthetic_summary(),
+            Dict{String,String}("release_summary.toml" => "s");
+            bundle_kind = "local_trusted",
+            model_export_format = "serialization",
+            training_config = full_training,
+        )
+        @test occursin("training = enabled", card)
+        @test !occursin("Dict(", card)
+
+        card = Awale.Publication.release_model_card(
+            synthetic_summary(),
+            Dict{String,String}("release_summary.toml" => "s");
+            bundle_kind = "local_trusted",
+            model_export_format = "serialization",
+            training_config = Dict{String,Any}("training" => true),
+        )
+        @test occursin("training = enabled", card)
+        @test !occursin("Dict(", card)
+    end
+
     @testset "read_bundle_configs parses bundle config TOMLs defensively" begin
         mktempdir() do root_dir
             empty_bundle = joinpath(root_dir, "empty")
