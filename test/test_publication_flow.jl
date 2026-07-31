@@ -277,3 +277,16 @@ end
         end
     end
 end
+
+@testset "model card helper functions" begin
+    @testset "format_metric rounds to 2-4 significant digits and strips trailing zeros" begin
+        @test Awale.Publication.format_metric(61.702127659574465) == "61.7"
+        @test Awale.Publication.format_metric(71.0) == "71"
+        @test Awale.Publication.format_metric(0.42) == "0.42"
+        @test Awale.Publication.format_metric(62.5) == "62.5"
+        @test Awale.Publication.format_metric(64.0) == "64"
+        @test Awale.Publication.format_metric(1.23456) == "1.235"
+        @test Awale.Publication.format_metric(0.5) == "0.5"
+        @test Awale.Publication.format_metric(300) == "300"
+    end
+end

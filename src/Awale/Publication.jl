@@ -169,6 +169,20 @@ function release_model_card_path(bundle_dir::AbstractString)::String
 end
 
 """
+    format_metric(x::Real) -> String
+
+Round a metric value to 4 significant digits and strip trailing zeros so the
+card body and the YAML `model-index` always agree on a compact representation
+(e.g. `61.702127659574465 -> "61.7"`, `71.0 -> "71"`, `0.42 -> "0.42"`).
+"""
+function format_metric(x::Real)::String
+    rounded = string(round(Float64(x); sigdigits = 4))
+    occursin('.', rounded) || return rounded
+    stripped = rstrip(rounded, '0')
+    return isempty(stripped) ? rounded : rstrip(stripped, '.')
+end
+
+"""
     write_model_card_front_matter(io::IO, summary::Dict{String, Any})
 
 Write YAML front-matter for a Hugging Face model card to `io`, extracting
