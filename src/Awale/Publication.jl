@@ -886,8 +886,10 @@ end
     card_usage(io; artifact_specs, model_export_format)
 
 Write the `## Usage` section: how to load the bundled weights and run inference.
-The weights path is derived from the actual bundle so the snippet never points at
-a file the release does not ship.
+The weights path is derived from the actual bundle, and the loader is dispatched
+to the payload format — `.f32` payloads are raw Float32 weights for
+`load_public_model`, `.bin` checkpoints are Julia-serialized objects for
+`load_model` — so the snippet never calls the wrong loader on a real file.
 """
 function card_usage(
     io::IO;
@@ -895,6 +897,8 @@ function card_usage(
     model_export_format::AbstractString,
 )
     weights_path = best_checkpoint_bundle_path(artifact_specs, model_export_format)
+    loader = endswith(weights_path, ".f32") ?
+             "Awale.Model.load_public_model" : "Awale.Model.load_model"
     println(io, "## Usage")
     println(
         io,
@@ -903,7 +907,7 @@ function card_usage(
     println(io)
     println(io, "```julia")
     println(io, "using Awale")
-    println(io, "model = Awale.Model.load_public_model(\"$weights_path\")")
+    println(io, "model = $(loader)(\"$weights_path\")")
     println(io, "logits, value = Awale.predict_inference(model, Awale.initial_state())")
     println(io, "```")
     println(io)

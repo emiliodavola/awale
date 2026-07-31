@@ -625,6 +625,7 @@ end
             model_export_format = "float32",
         )
         @test occursin("load_public_model(\"artifacts/model_best.f32\")", card)
+        @test !occursin("load_model(\"", card)
 
         bin_specs = Dict{String,String}(
             "release_summary.toml" => "s",
@@ -636,7 +637,8 @@ end
             bundle_kind = "local_trusted",
             model_export_format = "serialization",
         )
-        @test occursin("load_public_model(\"artifacts/model_best.bin\")", card)
+        @test occursin("load_model(\"artifacts/model_best.bin\")", card)
+        @test !occursin("load_public_model", card)
         @test !occursin("model_best.f32", card)
     end
 
