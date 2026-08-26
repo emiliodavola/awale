@@ -72,6 +72,10 @@ dev → main PR; there are no hotfix-direct-to-main releases.
    and pushes the annotated tag `v<version>` and a GitHub Release with
    "What's Changed" notes generated since the previous tag.
 
+If the tag was pushed but the GitHub Release creation fails (e.g. a transient
+API error), the workflow leaves an orphan tag. Recovery: delete the remote tag
+manually (`git push origin --delete v<version>`) and re-dispatch the workflow.
+
 ### Double-create guard
 
 The workflow aborts with a clear error if the tag `v<version>` already exists
