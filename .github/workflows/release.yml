@@ -1,0 +1,76 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Guard dispatch branch is main
+        run: |
+          if [ "${{ github.ref }}" != "refs/heads/main" ]; then
+            echo "::error::Release workflow must be dispatched on main (current ref: ${{ github.ref }}) - aborting"
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Julia
+        uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.11'
+
+      - name: Cache Julia artifacts
+        uses: julia-actions/cache@v2
+
+      - name: Prepare runtime configs
+        run: |
+          cp config.toml.example config.toml
+          cp src/Awale/config.toml.example src/Awale/config.toml
+
+      - name: Instantiate
+        run: julia --project=. -e "using Pkg; Pkg.instantiate()"
+
+      - name: Run tests (gate)
+        run: julia --project=. -e "using Pkg; Pkg.test()"
+
+      - name: Read version from Project.toml
+        id: version
+        run: |
+          VER="$(julia -e 'using TOML; print(TOML.parsefile("Project.toml")["version"])')" || exit 1
+          [[ "$VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::invalid version '$VER' in Project.toml"; exit 1; }
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+
+      - name: Guard tag exists
+        run: |
+          if git ls-remote --tags origin "refs/tags/v${{ steps.version.outputs.version }}" | grep -q .; then
+            echo "::error::Tag v${{ steps.version.outputs.version }} already exists - aborting"
+            exit 1
+          fi
+
+      - name: Guard release exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            echo "::error::Release v${{ steps.version.outputs.version }} already exists - aborting"
+            exit 1
+          fi
+
+      - name: Create annotated tag and push tag ref
+        run: |
+          git tag -a "v${{ steps.version.outputs.version }}" -m "Release v${{ steps.version.outputs.version }}"
+          git push origin "v${{ steps.version.outputs.version }}"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "v${{ steps.version.outputs.version }}" --generate-notes
