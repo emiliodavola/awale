@@ -41,3 +41,32 @@ jobs:
 
       - name: Run tests (gate)
         run: julia --project=. -e "using Pkg; Pkg.test()"
+
+      - name: Read version from Project.toml
+        id: version
+        run: |
+          echo "version=$(julia -e 'using TOML; print(TOML.parsefile("Project.toml")["version"])')" >> "$GITHUB_OUTPUT"
+
+      - name: Guard tag exists
+        run: |
+          if git ls-remote --tags origin "refs/tags/v${{ steps.version.outputs.version }}" | grep -q .; then
+            echo "::error::Tag v${{ steps.version.outputs.version }} already exists - aborting"
+            exit 1
+          fi
+
+      - name: Guard release exists
+        run: |
+          if gh release view "v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            echo "::error::Release v${{ steps.version.outputs.version }} already exists - aborting"
+            exit 1
+          fi
+
+      - name: Create annotated tag and push tag ref
+        run: |
+          git tag -a "v${{ steps.version.outputs.version }}" -m "Release v${{ steps.version.outputs.version }}"
+          git push origin "v${{ steps.version.outputs.version }}"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "v${{ steps.version.outputs.version }}" --generate-notes
